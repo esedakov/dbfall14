@@ -86,6 +86,27 @@ void prepareMyRecord(const int key, const int valLength, char c, void *buffer, i
 
     *recordSize = offset;
 }
+void prepareMyRecord2(const int ikey, const float fkey, const int valLength, char c, void *buffer, int *recordSize)
+{
+    int offset = 0;
+
+    memcpy((char *)buffer + offset, &ikey, sizeof(int));
+    offset += sizeof(int);
+
+    memcpy((char *)buffer + offset, &fkey, sizeof(float));
+    offset += sizeof(float);
+
+    string val;
+    for(int i = 0; i < valLength; i++)
+    	val.push_back(c);
+
+    memcpy((char *)buffer + offset, &valLength, sizeof(int));
+    offset += sizeof(int);
+    memcpy((char *)buffer + offset, val.c_str(), valLength);
+    offset += valLength;
+
+    *recordSize = offset;
+}
 void prepareLargeRecord(const int index, void *buffer, int *size)
 {
     int offset = 0;
@@ -175,6 +196,22 @@ void createMyRecordDescriptor(vector<Attribute> &recordDescriptor)
 	attr.name = "val";
 	attr.type = TypeInt;
 	attr.length = (AttrLength)4;
+	recordDescriptor.push_back(attr);
+}
+void createMyRecordDescriptor2(vector<Attribute> &recordDescriptor, const int varCharLength)
+{
+	Attribute attr;
+	attr.name = "ikey";
+	attr.type = TypeInt;
+	attr.length = (AttrLength)4;
+	recordDescriptor.push_back(attr);
+	attr.name = "fkey";
+	attr.type = TypeReal;
+	attr.length = (AttrLength)4;
+	recordDescriptor.push_back(attr);
+	attr.name = "val";
+	attr.type = TypeVarChar;
+	attr.length = (AttrLength)varCharLength;
 	recordDescriptor.push_back(attr);
 }
 int RBFTest_1(PagedFileManager *pfm)
@@ -893,27 +930,31 @@ int RBFTest_My_3(RecordBasedFileManager *rbfm, vector<RID> &rids, vector<int> &s
 	 * 1. insert a page of records with no space left inside this page
 	 * 		=> record format: <int, real, varchar> of size 511 bytes: int:4, real:4, varchar:503
 	 * 		=> page size is 4096 - 4*2 (for meta-data) = 4088 / 511 = 8 records in total
+	 * 		=> 511 is not the actual size of record but is cumulative of record size and dir slot size
+	 * 			+ record size is 511 - 8 = 503
 	 * 		=> no free space left
 	 * 2. update records
 	 * 		=> record # 0, 3, 6 should get updated with varchar increased to size of 600 bytes, and the updated total size of record then would be 600+8 = 608 bytes
 	 * 		=> could not fit within the former spots, so they will get reallocated in the second page
 	 * 		=> keep in mind, when record is reallocated and TombStone is placed instead of its content, the actual size changes to unsigned version of -1
 	 * 			so technically speaking, the freed up space (between end of TombStone and beginning of new record) still cannot be used
-	 * 3. read records # 0, 2
+	 * 3. read records # 0, 1
 	 * 		=> 0 is TombStone
-	 * 		=> 2 is regular
-	 * 4. read varchar attribute of record 3 and compare with original
+	 * 		=> 1 is regular
+	 * 4. read varchar attribute of record 3 and compare with the original
 	 * 5. perform page reorganization
-	 * 		=> 3 records would be reorganized, and cumulative freed up space should be 3 * 511 (former size of record is 511 bytes) - 3 * 8 (TombStone is 8 bytes) = 1509 bytes of free space!
-	 * 6. read varchar attribute of record # 6
-	 * 7. insert a new large record of size 1509 bytes just to check whether insertion works properly
-	 * 8. delete all records
+	 * 		=> 3 records would be reorganized, and cumulative freed up space should be 3 * 503 (former size of record is 511 bytes) - 3 * 8 (TombStone is 8 bytes) = 1485 bytes of free space!
+	 * 6. read all records from 1st page
+	 * 7. delete record # 5
+	 * 8. insert a new large record of size 1485 bytes just to check whether insertion works properly
+	 * 9. read again all records from 1st page
+	 * 10. delete all records
 	 */
     cout << "****In RBF Test Case My-3****" << endl;
     //1. insert a page of records with no space left inside this page
     RC rc;
     string fileName = "test_5";
-    // Create a file named "test_4"
+    // Create a file named "test_5"
     rc = rbfm->createFile(fileName.c_str());
     assert(rc == success);
     if(FileExists(fileName.c_str()))
@@ -923,37 +964,43 @@ int RBFTest_My_3(RecordBasedFileManager *rbfm, vector<RID> &rids, vector<int> &s
     else
     {
         cout << "Failed to create file!" << endl;
-        cout << "Test Case 9 Failed!" << endl << endl;
+        cout << "Test Case My-3 Failed!" << endl << endl;
         return -1;
     }
-    // Open the file "test_4"
+    // Open the file "test_5"
     FileHandle fileHandle;
     rc = rbfm->openFile(fileName.c_str(), fileHandle);
     assert(rc == success);
     RID rid;
-    void *record = malloc(1000);
-    int numRecords = 2000;
-    void *returnedData = malloc(1000);	//
+    int size_of_record = 503;
+    int numRecords = 9;	//changed to 9, so that 2 data pages are utilized (1st page with 8 records, 2nd page with 1 record)
+    void *returnedData = malloc(size_of_record);
     vector<Attribute> recordDescriptor;
-    createLargeRecordDescriptor(recordDescriptor);
+    createMyRecordDescriptor2(recordDescriptor, size_of_record-12);	//503-12 = 491 -> size of char-array in the record
     for(unsigned i = 0; i < recordDescriptor.size(); i++)
     {
         cout << "Attribute Name: " << recordDescriptor[i].name << endl;
         cout << "Attribute Type: " << (AttrType)recordDescriptor[i].type << endl;
         cout << "Attribute Length: " << recordDescriptor[i].length << endl << endl;
     }
-    // Insert 2000 records into file
+    map<int, pair<RID, char*> > buf_of_records;
+    int size = 0;
+    void *record = NULL;
+    // Insert 9 records into file
     for(int i = 0; i < numRecords; i++)
     {
-        // Test insert Record
-        int size = 0;
-        memset(record, 0, 1000);
-        prepareLargeRecord(i, record, &size);
+        size = 0;
+        record = malloc(size_of_record);
+        memset(record, 0, size_of_record);
+        prepareMyRecord2(i, i*1.0f, size_of_record-12, (char)('a' + i % 24), record, &size);
         rc = rbfm->insertRecord(fileHandle, recordDescriptor, record, rid);
         assert(rc == success);
+        pair<RID, char*> inner = pair<RID, char*>(rid, (char*) record);
+        pair<int, pair<RID, char*> > outter = pair<int, pair<RID, char*> >(i, inner);
+        buf_of_records.insert(outter);
         rids.push_back(rid);
         sizes.push_back(size);
-        memset(returnedData, 0, 1000);	//
+        memset(returnedData, 0, size_of_record);
         rc = rbfm->readRecord(fileHandle, recordDescriptor, rid, returnedData);	//
         cout << "first" << endl;	//
         rbfm->printRecord(recordDescriptor, record);	//
@@ -961,22 +1008,269 @@ int RBFTest_My_3(RecordBasedFileManager *rbfm, vector<RID> &rids, vector<int> &s
         rbfm->printRecord(recordDescriptor, returnedData);	//
         if(memcmp(returnedData, record, sizes[i]) != 0)	//
         {	//
-        	cout << "not equal";	//
+        	cout << "not equal => My-3 failed";	//
+        	return -1;
         }	//
+        				memset(returnedData, 0, size_of_record);	//
+                        RID secondRid;
+                        secondRid.pageNum = 1;
+                        secondRid.slotNum = 0;
+                        rc = rbfm->readRecord(fileHandle, recordDescriptor, secondRid, returnedData);	//
+                        rbfm->printRecord(recordDescriptor, returnedData);	//
     }
-    // Close the file "test_4"
+    //2. update records (not fun to write long test cases...)
+    //prepare arguments
+    size_of_record = 600;
+    int rec_to_be_updated[] = {0,3,6};
+    int index_of_record = 0;
+    //create new record description
+    recordDescriptor.clear();
+    createMyRecordDescriptor2(recordDescriptor, size_of_record-12);	//600-12 = 592 -> size of char-array in the record
+    //prepare new (updated) records 0, 3, and 6
+    rid.pageNum = 1;
+    while(index_of_record < 3)
+    {
+    	//allocate new buffer
+    	record = malloc(size_of_record);
+    	//null record
+    	memset(record, 0, size_of_record);
+    	//record id
+    	int id = rec_to_be_updated[index_of_record];
+    	rid.slotNum = id;
+    	//prepare record
+    	prepareMyRecord2(id, id * 1.0f, size_of_record-12, (char)('z' - id % 24), record, &size);
+    	//replace content of the old record with new and free the old buffers
+		char* buf_to_free = buf_of_records.at(id).second;
+		free(buf_to_free);
+		buf_of_records[id].second = (char*)record;
+    	//update record
+    	rc = rbfm->updateRecord(fileHandle, recordDescriptor, record, rid);
+    	assert(rc == success);
+    	index_of_record++;
+    }
+    //3. read records 0 (re-allocated) and 1 (not changed)
+    memset(record, 0, size_of_record);
+    //read record # 0
+    rid.slotNum = 0;
+    rid.pageNum = 1;
+    rc = rbfm->readRecord(fileHandle, recordDescriptor, rid, record);
+    assert(rc == success);
+    cout << "read from DB zeroth:" << endl;	//
+	rbfm->printRecord(recordDescriptor, record);	//
+	cout << "read from map" << endl;	//
+	void* zeroth_data = (void*)buf_of_records[0].second;
+	rbfm->printRecord(recordDescriptor, zeroth_data);
+	if(memcmp(zeroth_data, record, size_of_record) != 0)	//
+	{	//
+		cout << "not equal => My-3 failed";	//
+		return -1;
+	}
+	//read record # 1
+	size_of_record = 503;
+	memset(returnedData, 0, size_of_record);
+	rid.slotNum = 1;
+	rid.pageNum = 1;
+	vector<Attribute> recordDescriptor511;
+	createMyRecordDescriptor2(recordDescriptor511, size_of_record-12);	//503-12 = 491 -> size of char-array in the record
+	rc = rbfm->readRecord(fileHandle, recordDescriptor511, rid, returnedData);
+	assert(rc == success);
+	cout << "read from DB first:" << endl;	//
+	rbfm->printRecord(recordDescriptor511, returnedData);	//
+	cout << "read from map" << endl;	//
+	void* first_data = (void*)buf_of_records[1].second;
+	rbfm->printRecord(recordDescriptor511, first_data);
+	if(memcmp(first_data, returnedData, size_of_record) != 0)	//
+	{	//
+		cout << "not equal => My-3 failed";	//
+		return -1;
+	}
+	//4. read varchar attribute of record 3 and compare with the original
+	/*
+	 * 0=a
+	 * 1=b
+	 * 2=c
+	 * 3=d
+	 * 4=e
+	 * 5=f
+	 * 6=g
+	 * 7=h
+	 */
+	size_of_record = 600-12;
+	free(record);
+	record = malloc(size_of_record + 1);
+	memset(record, 0, size_of_record+1);
+	rid.pageNum = 1;
+	rid.slotNum = 3;
+	string attrName = "val";
+	rc = rbfm->readAttribute(fileHandle, recordDescriptor, rid, attrName, record);
+	assert(rc == success);
+	if( ((char*)record)[size_of_record] != '\0' || ((char*)record)[0] != 'w' )
+	{
+		cout << "read attribute is not working" << endl;
+		return -1;
+	}
+	//5. perform page reorganization
+	rc = rbfm->reorganizePage(fileHandle, recordDescriptor511, 1);
+	assert(rc == success);
+	//6. read all records from 1st page
+	int j = 0, max = 8;
+	free(record);
+	record = malloc(PAGE_SIZE);
+	for(; j < max; j++)
+	{
+		memset(record, 0, PAGE_SIZE);
+		//read record # 0
+		rid.slotNum = j;
+		rid.pageNum = 1;
+		rc = rbfm->readRecord(fileHandle, recordDescriptor, rid, record);
+		assert(rc == success);
+		cout << "read item # " << j << endl;	//
+		rbfm->printRecord(recordDescriptor, record);	//
+	}
+	//7. delete record 5
+	rid.pageNum = 1;
+	rid.slotNum = 5;
+	rc = rbfm->deleteRecord(fileHandle, recordDescriptor, rid);
+	//8. insert a new large record of size 1485 bytes just to check whether insertion works properly
+	vector<Attribute> recordDescriptor1485;
+	size_of_record = 1485;
+	createMyRecordDescriptor2(recordDescriptor1485, size_of_record-12);	//1485-12 = 1473 -> size of char-array in the record
+	free(record);
+	record = malloc(size_of_record);
+	memset(record, 0, size_of_record);
+	size = 0;
+	prepareMyRecord2(9, 9*1.0f, size_of_record-12, (char)('K'), record, &size);
+	rc = rbfm->insertRecord(fileHandle, recordDescriptor1485, record, rid);
+	assert(rc == success);
+	free(returnedData);
+	returnedData = malloc(size_of_record);
+	memset(returnedData, 0, size_of_record);	//
+	rc = rbfm->readRecord(fileHandle, recordDescriptor, rid, returnedData);	//
+	cout << "local record for 1485:" << endl;	//
+	rbfm->printRecord(recordDescriptor, record);	//
+	cout << "db record for 1485:" << endl;	//
+	rbfm->printRecord(recordDescriptor, returnedData);	//
+	if(memcmp(returnedData, record, size_of_record) != 0)	//
+	{	//
+		cout << "not equal => My-3 failed";	//
+		return -1;
+	}
+	//9. read again all records
+	j = 0;
+	max = 8;
+	free(record);
+	record = malloc(PAGE_SIZE);
+	for(; j < max; j++)
+	{
+		memset(record, 0, PAGE_SIZE);
+		rid.slotNum = j;
+		rid.pageNum = 1;
+		rc = rbfm->readRecord(fileHandle, recordDescriptor, rid, record);
+		assert(rc == success);
+		cout << "read item # " << j << endl;	//
+		rbfm->printRecord(recordDescriptor, record);	//
+	}
+	//10. delete all records
+	rc = rbfm->deleteRecords(fileHandle);
+	assert(rc == success);
+    // Close the file "test_5"
     rc = rbfm->closeFile(fileHandle);
     assert(rc == success);
+    //free up the buffers used
+    map<int, pair<RID, char*> >::iterator it = buf_of_records.begin();
+    for(; it != buf_of_records.end(); it++)
+    {
+    	free(it->second.second);
+    }
     free(record);
-    cout << "Test Case 9 Passed!" << endl << endl;
+    free(returnedData);
+    cout << "Test Case My-3 Passed!" << endl << endl;
     return 0;
 }
-//extra test for later: create very small records (just 4 bytes long) and try to update their size, so that they need to reallocate (insert a TombStone)
+//may be extra test for later: create very small records (just 4 bytes long) and try to update their size, so that they need to reallocate (insert a TombStone)
+
+int RBFTest_My_4(RecordBasedFileManager *rbfm) {
+	cout << "****In RBF Test Case My-4****" << endl;
+	RC rc;
+	string fileName = "test_6";
+	// Create a file named "test_6"
+	rc = rbfm->createFile(fileName.c_str());
+	assert(rc == success);
+	if(FileExists(fileName.c_str()))
+	{
+		cout << "File " << fileName << " has been created." << endl;
+	}
+	else
+	{
+		cout << "Failed to create file!" << endl;
+		cout << "Test Case My-4 Failed!" << endl << endl;
+		return -1;
+	}
+	// Open the file "test_6"
+	FileHandle fileHandle;
+	rc = rbfm->openFile(fileName.c_str(), fileHandle);
+	assert(rc == success);
+	RID rid;
+	vector<Attribute> recordDescriptor;
+	createRecordDescriptor(recordDescriptor);
+	vector<string> attrNames;
+	unsigned int i;
+	for(i = 0; i < recordDescriptor.size(); i++)
+	{
+		cout << "Attribute Name: " << recordDescriptor[i].name << endl;
+		attrNames.push_back(string(recordDescriptor[i].name));
+		cout << "Attribute Type: " << (AttrType)recordDescriptor[i].type << endl;
+		cout << "Attribute Length: " << recordDescriptor[i].length << endl << endl;
+	}
+	map<int, pair<RID, char*> > buf_of_records;
+	int size = 0;
+	void *record = malloc(100);
+	int numRecords = 20;
+	char* names[] = { "AaaaaA", "BbbbbbbbbB", "CcccccC", "DdddddD", "EeeeE" };
+	// Insert records
+	for(i = 0; i < numRecords; i++)
+	{
+		size = 0;
+		char* str = names[i % 5];
+		// Insert a record into a file
+		prepareRecord(strlen(str), str, i % 10, i * 1.0f, 5000, record, &size);
+		rc = rbfm->insertRecord(fileHandle, recordDescriptor, record, rid);
+		assert(rc == success);
+	}
+	//scan the file
+	RBFM_ScanIterator it;
+	RID itRid = {0, 0};
+	void* data = malloc(PAGE_SIZE);
+	memset(data, 0, PAGE_SIZE);
+	char compArg1[] = "CcccccC";
+	assert(rbfm->scan(fileHandle, recordDescriptor, "EmpName", EQ_OP, compArg1, attrNames, it) == success);
+	while(it.getNextRecord(itRid, data) != RBFM_EOF)
+	{
+		rbfm->readRecord(fileHandle, recordDescriptor, itRid, data);
+		cout << "found record: " << endl;
+		rbfm->printRecord(recordDescriptor, data);
+	}
+	memset(data, 0, PAGE_SIZE);
+	int compArg2 = 4;
+	assert(rbfm->scan(fileHandle, recordDescriptor, "Age", GE_OP, &compArg2, attrNames, it) == success);
+	while(it.getNextRecord(itRid, data) != RBFM_EOF)
+	{
+		rbfm->readRecord(fileHandle, recordDescriptor, itRid, data);
+		cout << "found record: " << endl;
+		rbfm->printRecord(recordDescriptor, data);
+	}
+	// Close the file "test_6"
+	rc = rbfm->closeFile(fileHandle);
+	assert(rc == success);
+	free(record);
+	cout << "Test Case My-4 Passed!" << endl << endl;
+	return 0;
+}
 
 int main()
 {
     // To test the functionality of the paged file manager
-    PagedFileManager *pfm = PagedFileManager::instance();
+    //PagedFileManager *pfm = PagedFileManager::instance();
 
 
     // To test the functionality of the record-based file manager
@@ -990,8 +1284,10 @@ int main()
     remove("test_3");
     remove("test_4");
     remove("test_my_1");
+    remove("test_5");
+    remove("test_6");
 
-    RBFTest_1(pfm);
+    /*RBFTest_1(pfm);
     RBFTest_2(pfm);
     RBFTest_3(pfm);
     RBFTest_4(pfm);
@@ -1000,16 +1296,19 @@ int main()
     RBFTest_7(pfm);
     RFBTest_boundary_cases(pfm);
     RBFTest_8(rbfm);
-
+	*/
     vector<RID> rids;
     vector<int> sizes;
     //RBFTest_9(rbfm, rids, sizes);
     //RBFTest_10(rbfm, rids, sizes);
 
-    rids.clear();
+    /*rids.clear();
     sizes.clear();
     RBFTest_My_1(rbfm, rids, sizes);
-    RBFTest_My_2(rbfm, rids, sizes);
+    RBFTest_My_2(rbfm, rids, sizes);*/
+
+    //RBFTest_My_3(rbfm, rids, sizes);
+    RBFTest_My_4(rbfm);
 
     return 0;
 }

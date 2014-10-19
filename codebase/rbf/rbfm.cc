@@ -48,10 +48,12 @@ RecordBasedFileManager::~RecordBasedFileManager()
  * -20 = unknown type of record caught at printRecord function
  * -21 = size of record exceeds size of page (less required page meta-data)
  * -22 = could not insert record, because page header contains incorrect information about free space in the data pages
- * -23 = rid is not setup correctly OR page number exceeds the total number of pages in a file
+ * -23 = rid is not setup correctly
  * -24 = directory slot stores wrong information
  * -25 = cannot update record without change of rid (no space within the given page, and cannot move to a different page!)
  * -26 = no requested attribute was found inside the record
+ * -27 = could not find header page for the specified id of the data page (list of headers is corrupted)
+ * -28 = page number exceeds the total number of pages in a file
 **/
 
 RC RecordBasedFileManager::createFile(const string &fileName) {
@@ -181,7 +183,7 @@ RC RecordBasedFileManager::getDataPage(FileHandle &fileHandle, const unsigned in
 			PageInfo* pi = &(hPage->_arrOfPageIds[i]);
 
 			//if it has the proper number of free bytes than return information about this page
-			if( pi->_numFreeBytes > recordSize + sizeof(PageDirSlot) )
+			if( pi->_numFreeBytes >= recordSize + sizeof(PageDirSlot) )	//inconsistency found: if amount of free space left in page and requested size are exactly equal than it would skip this candidate page and allocate a new data page, so I changed '>' to '>='
 			{
 				//assign id
 				pageNum = pi->_pageid;
@@ -325,10 +327,14 @@ RC RecordBasedFileManager::findRecordSlot(FileHandle &fileHandle, PageNum pagenu
 	//pointer to the start of the list of directory slots
 	PageDirSlot* startOfDirSlot = (PageDirSlot*)( endOfDirSlot - (*ptrNumSlots) );
 
+	//assign number of slots to a passed variable by reference
+	slotNum = (*ptrNumSlots) - 1;
+
 	//determine if there is available page directory slot, left from priorly removed record
 	PageDirSlot* curSlot = startOfDirSlot;
 	while(curSlot != endOfDirSlot)
 	{
+
 		//check if this slot is empty(unsigned int*)( (char*)(endOfDirSlot) + sizeof(unsigned int) )
 		if(curSlot->_offRecord == 0 && curSlot->_szRecord == 0)
 		{
@@ -338,11 +344,17 @@ RC RecordBasedFileManager::findRecordSlot(FileHandle &fileHandle, PageNum pagenu
 
 		//increment to the next slot
 		curSlot++;
+
+		//update slot number (going from the last to the first)
+		slotNum--;
 	}
 
 	//if there is not available page directory slot, then "reserve next" (get a pointer to it)
 	if( curSlot == endOfDirSlot )
 	{
+		//assign a new slot
+		slotNum = *ptrNumSlots;
+
 		//point it at the slot right before start of list of directory slots
 		curSlot = (PageDirSlot*)(startOfDirSlot - 1);
 		startOfDirSlot = curSlot;
@@ -363,7 +375,7 @@ RC RecordBasedFileManager::findRecordSlot(FileHandle &fileHandle, PageNum pagenu
 		freeSpaceLeftInPage++;
 	}
 
-	//if size of free space is not enough return -1 (because it was suppose to be enough, since this page was found by method getPage)
+	//if size of free space is not enough return -22 (because it was suppose to be enough, since this page was found by method getPage)
 	if( szOfFreeSpace < szRecord )
 	{
 		//free data
@@ -379,9 +391,6 @@ RC RecordBasedFileManager::findRecordSlot(FileHandle &fileHandle, PageNum pagenu
 
 	//update start of free space
 	*ptrVarForFreeSpace += szRecord;
-
-	//assign number of slots to a passed variable by reference
-	slotNum = (*ptrNumSlots) - 1;
 
 	//assign slot passed by reference
 	slot = *curSlot;
@@ -484,7 +493,7 @@ RC RecordBasedFileManager::readRecord(FileHandle &fileHandle, const vector<Attri
 
     if( rid.pageNum == 0 || rid.pageNum >= fileHandle.getNumberOfPages() )
     {
-    	return -23; //rid is not setup correctly
+    	return -28; //rid is not setup correctly
     }
 
     //allocate array for storing contents of the data page
@@ -721,6 +730,9 @@ RC RecordBasedFileManager::deleteRecords(FileHandle &fileHandle)
 			return errCode;
 		}
 
+		//go to next page
+		pagenum++;
+
 	}
 
 	//free data page
@@ -757,7 +769,54 @@ RC RecordBasedFileManager::deleteRecord(FileHandle &fileHandle, const vector<Att
 	PageDirSlot* endOfDirSlot = (PageDirSlot*)((char*)dataPage + PAGE_SIZE - sizeof(unsigned int) - sizeof(unsigned int));
 
 	//find proper slot number pointed by rid
-	PageDirSlot* curDirSlot = endOfDirSlot - rid.slotNum;
+	PageDirSlot* curDirSlot = endOfDirSlot - (rid.slotNum + 1);
+
+	//update header page
+	//define variable to store id of the header page
+	PageNum headerPage = 0;
+
+	//get header for this data page
+	if( (errCode = findHeaderPage(fileHandle, rid.pageNum, headerPage)) != 0 )
+	{
+		//free buffers
+		free(dataPage);
+
+		//return error code
+		return errCode;
+	}
+
+	//set free size for this data page inside the appropriate header page
+	void* data = malloc(PAGE_SIZE);
+	memset(data, 0, PAGE_SIZE);
+
+	//get the found header page
+	if( (errCode = fileHandle.readPage((PageNum)headerPage, data)) != 0 )
+	{
+		//deallocate data
+		free(data);
+
+		//return error
+		return errCode;
+	}
+
+	//cast data to Header
+	Header* hPage = (Header*)data;
+
+	//set amount of free space for the data page inside this header
+	(hPage->_arrOfPageIds)[rid.pageNum % NUM_OF_PAGE_IDS]._numFreeBytes += sizeof(PageDirSlot);
+
+	//write back to header
+	if( (errCode = fileHandle.writePage(headerPage, data)) != 0 )
+	{
+		//free data page
+		free(dataPage);
+
+		//return error code
+		return errCode;
+	}
+
+	//free data buffer used for header page
+	free(data);
 
 	//null the contents of this slot
 	curDirSlot->_offRecord = 0;
@@ -804,13 +863,13 @@ RC RecordBasedFileManager::updateRecord(FileHandle &fileHandle, const vector<Att
 	 * start of page                                                          start of dirSlot        end of dirSlot                                                                          end of page
 	 */
 	//determine pointer to the end of the list of directory slots
-	PageDirSlot* endOfDirSlot = (PageDirSlot*)((char*)data + PAGE_SIZE - sizeof(unsigned int) - sizeof(unsigned int));
+	PageDirSlot* endOfDirSlot = (PageDirSlot*)((char*)dataPage + PAGE_SIZE - sizeof(unsigned int) - sizeof(unsigned int));
 
 	//get a pointer to the current slot
-	PageDirSlot* curDirSlot = endOfDirSlot - rid.slotNum;
+	PageDirSlot* curDirSlot = endOfDirSlot - (rid.slotNum + 1);
 
 	//get a pointer to the "old record"
-	char* oldRecord = (char*)data + curDirSlot->_offRecord;
+	char* oldRecord = (char*)dataPage + curDirSlot->_offRecord;
 
 	//determine if the sizes of the old record (stored in a file) and a new one (stored in data) are the same
 	unsigned int newSize = sizeOfRecord(recordDescriptor, data), oldSize = curDirSlot->_szRecord;
@@ -919,6 +978,16 @@ RC RecordBasedFileManager::updateRecord(FileHandle &fileHandle, const vector<Att
 	tombStone->pageNum = newRid.pageNum;
 	tombStone->slotNum = newRid.slotNum;
 
+	//write back the data page
+	if( (errCode = fileHandle.writePage(rid.pageNum, dataPage)) != 0 )
+	{
+		//free data page
+		free(dataPage);
+
+		//return error code
+		return errCode;
+	}
+
 	//free data page
 	free(dataPage);
 
@@ -937,7 +1006,7 @@ RC RecordBasedFileManager::readAttribute(FileHandle &fileHandle, const vector<At
 	}
 
 	//allocate buffer of the maximum record size
-	char* recordBuf = malloc(MAX_SIZE_OF_RECORD);
+	char* recordBuf = (char*) malloc(MAX_SIZE_OF_RECORD);
 
 	if( (errCode = readRecord(fileHandle, recordDescriptor, rid, recordBuf)) != 0 )
 	{
@@ -972,7 +1041,7 @@ RC RecordBasedFileManager::readAttribute(FileHandle &fileHandle, const vector<At
 				sz = sizeof(float);
 				break;
 			case TypeVarChar:
-				sz = (unsigned int)*curPtr;
+				sz = *((unsigned int*)curPtr);
 				curPtr += sizeof(int);
 				break;
 			}
@@ -1012,23 +1081,14 @@ RC RecordBasedFileManager::reorganizePage(FileHandle &fileHandle, const vector<A
 {
 	RC errCode = 0;
 
-	/*
-	 * TODO: (readRecord changes are complete)
-	 * 	reorganizePage should account for two sources of "file holes":
-	 * 			when record is deleted
-	 * 				size = 0
-	 * 			when record is moved (i.e. updated) and a TombStone is left in its place (TombStone is likely to be smaller than the record size)
-	 * 				size = -1 and offset = ### (size is equal to a TOMBSTONE_SIZE)
-	**/
-
 	//check that page number has legal value
 	if( pageNumber >= fileHandle.getNumberOfPages() )
 	{
-		return -23;	//given page number exceeds total number of pages in a file
+		return -28;	//given page number exceeds total number of pages in a file
 	}
 
 	//allocate buffer to hold a copy of page
-	char* buffer = malloc(PAGE_SIZE);
+	char* buffer = (char*) malloc(PAGE_SIZE);
 
 	//read the page data that is to be re-organized
 	if( (errCode = fileHandle.readPage(pageNumber, buffer)) != 0 )
@@ -1053,14 +1113,14 @@ RC RecordBasedFileManager::reorganizePage(FileHandle &fileHandle, const vector<A
 	unsigned int* ptrNumSlots = (unsigned int*)(endOfDirSlot);
 
 	//pointer to the start of free space
-	unsigned int* ptrVarForFreeSpace = (unsigned int*)( (char*)(endOfDirSlot) + sizeof(unsigned int) );
-	char* ptrToFreeSpace = (char*)( (char*)buffer + (*ptrVarForFreeSpace) );
+	unsigned int* ptrVarForFreeSpace = (unsigned int*)( (char*)(endOfDirSlot) + sizeof(unsigned int) );	//not needed
+	//char* ptrToFreeSpace = (char*)( (char*)buffer + (*ptrVarForFreeSpace) );	//not needed
 
 	//pointer to the start of the list of directory slots
 	PageDirSlot* startOfDirSlot = (PageDirSlot*)( endOfDirSlot - (*ptrNumSlots) );
 
 	//create duplicate page, which would store re-organized page data (a.k.a. new page buffer)
-	char* reorganizedPage = new malloc(PAGE_SIZE);
+	char* reorganizedPage = (char*) malloc(PAGE_SIZE);
 
 	//null it
 	memset(reorganizedPage, 0, PAGE_SIZE);
@@ -1073,20 +1133,23 @@ RC RecordBasedFileManager::reorganizePage(FileHandle &fileHandle, const vector<A
 	unsigned int freeSpace = PAGE_SIZE - 2 * sizeof(unsigned int);
 
 	//loop thru directory slots and copy data "appropriately" into reorganizedPage buffer
-	PageDirSlot *curSlot = startOfDirSlot,
-			*curSlotInNewPageBuffer = (PageDirSlot*)((char*)reorganizedPage + PAGE_SIZE - 2 * sizeof(unsigned int)) - (*ptrNumSlots);
+	PageDirSlot *curSlot = endOfDirSlot,
+			*curSlotInNewPageBuffer = (PageDirSlot*)((char*)reorganizedPage + PAGE_SIZE - 2 * sizeof(unsigned int));
 
 	//maintain offset of the record in the reorganized page (a.k.a. new page buffer)
 	unsigned int offOfRecord = 0;
 
-	while(curSlot != endOfDirSlot)
+	do
 	{
+		//increment to the next slot
+		curSlot--;
+		curSlotInNewPageBuffer--;
+
 		//size of record in the reorganized page (a.k.a new page buffer)
-		//unsigned int szOfRecord = 0; //size goes into directory slot section, and it does not actually change:
-		//								for deleted record it remains zero, for TombStone it remains unsigned version of -1, and for regular record it remains the size of the record
+		unsigned int szOfRecord = 0;
 
 		//place record into the new page buffer (if needed)
-		/*if( curSlot->_szRecord == 0 )	//if size is zero, then this record has been deleted
+		if( curSlot->_szRecord == 0 )	//if size is zero, then this record has been deleted
 		{
 			//leave both size and offset equal to zero
 		}
@@ -1097,31 +1160,84 @@ RC RecordBasedFileManager::reorganizePage(FileHandle &fileHandle, const vector<A
 		else  //regular record, just copy it
 		{
 			szOfRecord = curSlot->_szRecord;
-		}*/
+		}
 
 		//if record has not been deleted, then
 		if( curSlot->_szRecord > 0 )
 		{
 			//copy contents of record
-			memcpy(reorganizedPage + offOfRecord, buffer + curSlot->_offRecord, curSlot->_szRecord);
+			memcpy(reorganizedPage + offOfRecord, buffer + curSlot->_offRecord, szOfRecord);
 		}
 
 		//update free space counter
-		freeSpace -= curSlot->_szRecord - sizeof(PageDirSlot);
+		freeSpace -= szOfRecord + sizeof(PageDirSlot);
 
 		//place page directory slot (always, even for deleted records, since this will ensure RID consistency, i.e. slot # will not be altered)
 		curSlotInNewPageBuffer->_szRecord = curSlot->_szRecord;
 		curSlotInNewPageBuffer->_offRecord = offOfRecord;
 
-		//increment to the next slot
-		curSlot++;
-
 		//increment offset within reorganized page
-		offOfRecord += curSlot->_szRecord;
-	}
+		offOfRecord += szOfRecord;
+	} while(curSlot != startOfDirSlot);
 
-	//place free space into appropriate attribute in the meta-data
-	*ptrVarForFreeSpace = freeSpace;
+	//set offset to the free space
+	*( (unsigned int*)( (char*)reorganizedPage + PAGE_SIZE - sizeof(unsigned int) ) ) =
+			PAGE_SIZE - freeSpace - (*ptrNumSlots) * sizeof(PageDirSlot) - 2 * sizeof(unsigned int);
+
+	//if by reorganizing this data page, the free space increased, then it is necessary to update header page information
+	if( freeSpace != *ptrVarForFreeSpace )
+	{
+		//variable to store id of the header page
+		PageNum headerPage = 0;
+
+		//get header for this data page
+		if( (errCode = findHeaderPage(fileHandle, pageNumber, headerPage)) != 0 )
+		{
+			//free buffers
+			free(reorganizedPage);
+			free(buffer);
+
+			//return error code
+			return errCode;
+		}
+
+		//set free size for this data page inside the appropriate header page
+		void* data = malloc(PAGE_SIZE);
+		memset(data, 0, PAGE_SIZE);
+
+		//get the found header page
+		if( (errCode = fileHandle.readPage((PageNum)headerPage, data)) != 0 )
+		{
+			//deallocate data
+			free(reorganizedPage);
+			free(buffer);
+			free(data);
+
+			//return error
+			return errCode;
+		}
+
+		//cast data to Header
+		Header* hPage = (Header*)data;
+
+		//set amount of free space for the data page inside this header
+		(hPage->_arrOfPageIds)[pageNumber % NUM_OF_PAGE_IDS]._numFreeBytes = freeSpace;
+
+		//write back to header
+		if( (errCode = fileHandle.writePage(headerPage, data)) != 0 )
+		{
+			//free data page
+			free(reorganizedPage);
+			free(buffer);
+			free(data);
+
+			//return error code
+			return errCode;
+		}
+
+		//free data buffer used for header page
+		free(data);
+	}
 
 	//replace old page contents with reorganized copy
 	if( (errCode = fileHandle.writePage(pageNumber, reorganizedPage)) != 0 )
@@ -1144,5 +1260,278 @@ RC RecordBasedFileManager::reorganizePage(FileHandle &fileHandle, const vector<A
 	return errCode;
 }
 
-//TODO: scan
-//TODO: reorganizeFile
+RC RecordBasedFileManager::findHeaderPage(FileHandle fileHandle, PageNum pageId, PageNum& retHeaderPage)
+{
+	RC errCode = 0;
+
+	//counters for current header IDs to loop thru
+	PageNum headerPageId = 0;
+
+	//pointer to the header page
+	Header* hPage = NULL;
+
+	//allocate temporary buffer for page
+	void* data = malloc(PAGE_SIZE);
+
+	//loop thru header pages
+	do
+	{
+		//get the first header page
+		if( (errCode = fileHandle.readPage((PageNum)headerPageId, data)) != 0 )
+		{
+			//deallocate data
+			free(data);
+
+			//return error
+			return errCode;
+		}
+
+		//cast data to Header
+		hPage = (Header*)data;
+
+		if( pageId < hPage->_numUsedPageIds )
+		{
+			//assign a found page id
+			retHeaderPage = headerPageId;
+
+			//free temporary buffer for header page
+			free(data);
+
+			//return success
+			return errCode;
+		}
+
+		pageId -= NUM_OF_PAGE_IDS;
+
+		//go to next header page
+		headerPageId = hPage->_nextHeaderPageId;
+
+	} while(headerPageId > 0);
+
+	//deallocate temporary buffer for header page
+	free(data);
+
+	//return error
+	return -27;
+}
+
+RC RecordBasedFileManager::scan(FileHandle &fileHandle,
+      const vector<Attribute> &recordDescriptor,
+      const string &conditionAttribute,
+      const CompOp compOp,                  // comparision type such as "<" and "="
+      const void *value,                    // used in the comparison
+      const vector<string> &attributeNames, // a list of projected attributes
+      RBFM_ScanIterator &rbfm_ScanIterator)
+{
+	//Q: should I open a new instance of the file?, i.e. get new FileHandle
+
+	//setup given iterator to point to the start of the file
+	rbfm_ScanIterator._compO = compOp;
+	rbfm_ScanIterator._conditionAttribute = conditionAttribute;
+	rbfm_ScanIterator._fileHandle = fileHandle;
+	rbfm_ScanIterator._pagenum = 1;
+	rbfm_ScanIterator._recordDescriptor = recordDescriptor;
+	rbfm_ScanIterator._slotnum = 0;
+	rbfm_ScanIterator._value = value;
+
+	//return success
+	return 0;
+}
+
+//TODO: reorganizeFile (later)
+
+//RBFM_ScanIterator section of code
+
+RBFM_ScanIterator::RBFM_ScanIterator()
+{
+	_compO = NO_OP;
+	_conditionAttribute = "";
+	_pagenum = 0;
+	_recordDescriptor.clear();
+	_slotnum = (unsigned int)-1;
+	_value = NULL;
+}
+
+RBFM_ScanIterator::~RBFM_ScanIterator()
+{
+	//do nothing
+}
+
+RC RBFM_ScanIterator::close()
+{
+	_compO = NO_OP;
+	_conditionAttribute = "";
+	_pagenum = 0;
+	_recordDescriptor.clear();
+	_slotnum = (unsigned int)-1;
+	_value = NULL;
+	return 0;
+}
+
+RC	RBFM_ScanIterator::getNextRecord(RID &rid, void* data)
+{
+	RC errCode = 0;
+
+	//check if data is setup correctly
+	if( data == NULL )
+	{
+		return -11; //data is corrupted
+	}
+
+	//check if rid is at the end-of-file; if it is return RBFM_EOF
+	if( _pagenum == 0 )
+	{
+		return RBFM_EOF;
+	}
+
+	//setup working instance of record based file manager
+	RecordBasedFileManager *rbfm = RecordBasedFileManager::instance();
+
+	//allocate space where record is stored
+	void* curRecord = malloc(PAGE_SIZE);
+
+	/*
+	 * the general goal is to check whether the current record (pointed by rid) satisfies condition (given by scan function)
+	 * 		=> if yes, then return data to the caller containing this record
+	 * 		=> if no, then go to the next record and repeat the process
+	 */
+
+	//loop until the required record is found
+	while( true )
+	{
+		//update rid values
+		rid.pageNum = _pagenum;
+		rid.slotNum = _slotnum;
+
+		//read current record
+		if( (errCode = rbfm->readRecord(_fileHandle, _recordDescriptor, rid, curRecord)) != 0 )
+		{
+			//if slot number in rid exceeds the maximum stored in this data page, then
+			if( errCode == -23 )
+			{
+				//need to go to the next page
+				_pagenum++;
+
+				//set slot to the start of the page
+				_slotnum = 0;
+			}
+
+			//if page number exceeds the maximum stored in this file, then
+			if( errCode == -28 )
+			{
+				//deallocate space assigned for record
+				free(curRecord);
+
+				//set internal page counter to 0, so that it this iterator is called again, it would quit immediately
+				_pagenum = 0;
+
+				//went thru entire file, i.e. cannot find the next record
+				return RBFM_EOF;
+			}
+		}
+
+		//check whether this record satisfies given condition
+
+		//loop thru record using stored record descriptor
+		void* ptrField = curRecord;
+		vector<Attribute>::iterator i = _recordDescriptor.begin(), max = _recordDescriptor.end();
+		for( ; i != max; i++ )
+		{
+			unsigned int szOfField = 0;
+
+			switch( i->type )
+			{
+			case TypeInt:
+				//setup size of field as integer
+				szOfField = sizeof(int);
+				break;
+			case TypeReal:
+				//setup size of field as float
+				szOfField = sizeof(int);
+				break;
+			case TypeVarChar:
+				//setup size of field as integer
+				szOfField = ((unsigned int*)curRecord)[0];
+
+				//skip the size and go to the character array
+				ptrField = (void*)( (char*)ptrField + sizeof(int) );
+				break;
+			}
+
+			//if this is a comparing field, then
+			if( i->name == _conditionAttribute )
+			{
+				int cmpValue = 0;
+				if( i->type == TypeVarChar )
+				{
+					cmpValue = strncmp((char*)ptrField, (char*)_value, szOfField);
+				}
+				else
+				{
+					cmpValue = memcmp(ptrField, _value, szOfField);
+				}
+
+				//determine if condition matches
+				bool isMatching = false;
+				switch(_compO)
+				{
+				case EQ_OP:
+					isMatching = cmpValue == 0;
+					break;
+				case LT_OP:
+					isMatching = cmpValue < 0;
+					break;
+				case GT_OP:
+					isMatching = cmpValue > 0;
+					break;
+				case LE_OP:
+					isMatching = cmpValue <= 0;
+					break;
+				case GE_OP:
+					isMatching = cmpValue >= 0;
+					break;
+				case NE_OP:
+					isMatching = cmpValue != 0;
+					break;
+				default:
+					return RBFM_EOF;
+				}
+
+				//if it matches, then
+				if( isMatching )
+				{
+					//determine exact size of record
+					unsigned int szOfRecord = sizeOfRecord(_recordDescriptor, curRecord);
+
+					//copy record to the data
+					memcpy(data, curRecord, szOfRecord);
+
+					//deallocate space for record
+					free(curRecord);
+
+					//increment internal slot counter to next item
+					_slotnum++;
+
+					//return success
+					return 0;	//do not substitute 0 with errCode, since the later value is likely to be equal to -28 or -23 (see above)
+				}
+
+				//if it is not match, then go to next record
+				break;
+			}
+
+			//increment to the next field
+			ptrField = (void*)( (char*)ptrField + szOfField );
+		}
+
+		//go to the next slot
+		_slotnum++;
+
+	}
+
+	//deallocate space for record
+	free(curRecord);
+
+	//return success
+	return errCode;
+}

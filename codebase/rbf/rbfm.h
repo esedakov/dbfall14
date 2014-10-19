@@ -46,7 +46,7 @@ The scan iterator is NOT required to be implemented for part 1 of the project
 
 # define RBFM_EOF (-1)  // end of a scan operator
 
-// RBFM_ScanIterator is an iteratr to go through records
+// RBFM_ScanIterator is an iterator to go through records
 // The way to use it is like the following:
 //  RBFM_ScanIterator rbfmScanIterator;
 //  rbfm.open(..., rbfmScanIterator);
@@ -58,12 +58,21 @@ The scan iterator is NOT required to be implemented for part 1 of the project
 
 class RBFM_ScanIterator {
 public:
-  RBFM_ScanIterator() {};
-  ~RBFM_ScanIterator() {};
+	RBFM_ScanIterator();
+	~RBFM_ScanIterator();
 
-  // "data" follows the same format as RecordBasedFileManager::insertRecord()
-  RC getNextRecord(RID &rid, void *data) { return RBFM_EOF; };
-  RC close() { return -1; };
+	// "data" follows the same format as RecordBasedFileManager::insertRecord()
+	RC getNextRecord(RID &rid, void *data);
+	RC close();
+public:
+	PageNum	_pagenum;
+	unsigned int	_slotnum;
+	FileHandle _fileHandle;
+	vector<Attribute> _recordDescriptor;
+	string _conditionAttribute;
+	CompOp _compO;					// comparision type such as "<" and "="
+	const void* _value;					// used in the comparison
+	//vector<string> _attributeNames;
 };
 
 //new structure - PageDirSlot. beginning.
@@ -117,6 +126,9 @@ public:
 
   // This method will be mainly used for debugging/testing
   RC printRecord(const vector<Attribute> &recordDescriptor, const void *data);
+
+  //get header page that contains the given data page id inside it
+  RC findHeaderPage(FileHandle fileHandle, PageNum pageId, PageNum& retHeaderPage);
 
 /**************************************************************************************************************************************************************
 ***************************************************************************************************************************************************************
