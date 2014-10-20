@@ -1338,7 +1338,67 @@ RC RecordBasedFileManager::scan(FileHandle &fileHandle,
 	return 0;
 }
 
-//TODO: reorganizeFile (later)
+RC RecordBasedFileManager::reorganizeFile(FileHandle &fileHandle, const vector<Attribute> &recordDescriptor){
+	RC errCode = 0;
+	const string tempFile="tempFile";
+
+	//create an empty file using pfm
+	if( (errCode = _pfm->createFile( tempFile.c_str() )) != 0 )
+		return errCode;
+
+	//create a handle for the file
+	FileHandle tempFileHandle;
+	if((errCode=openFile(tempFile.c_str(), tempFileHandle))!=0)
+			return errCode;
+
+	//create an iterator and its configuration
+	RBFM_ScanIterator iterator;
+	string conditionAttribute;
+	CompOp compOp=NO_OP;
+	vector<string> attributeNames;
+
+	//set the attribute names
+	for(unsigned int i=0; i<recordDescriptor.size(); i++)
+		attributeNames.push_back(recordDescriptor[i].name);
+
+	//set scan
+	scan(fileHandle, recordDescriptor, conditionAttribute, compOp, NULL, attributeNames, iterator );
+
+
+	//insert the records into temp file
+	RID itRid = {0, 0};
+	void* data = malloc(PAGE_SIZE);
+	memset(data, 0, PAGE_SIZE);
+	vector<RID> rids;
+	while(iterator.getNextRecord(itRid, data) != RBFM_EOF)
+	{
+		insertRecord(tempFileHandle, recordDescriptor, data, itRid);
+		rids.push_back(itRid);
+	}
+
+	//delete records from the original file
+	if((errCode=deleteRecords(fileHandle))!=0)
+		return errCode;
+
+	//bring back all records to the original file
+	for(unsigned int i = 0; i < rids.size(); i++)
+	{
+		memset(data, 0, PAGE_SIZE);
+		if((errCode=readRecord(tempFileHandle, recordDescriptor, rids[i], data)) != 0)
+			return errCode;
+		if((errCode=insertRecord(fileHandle, recordDescriptor, data, itRid)) != 0)
+			return errCode;
+	}
+
+	//close and destroy temp file
+	if((errCode=_pfm->closeFile(tempFileHandle)) != 0)
+		return errCode;
+	if((errCode=_pfm->destroyFile(tempFile.c_str())) != 0)
+		return errCode;
+
+	return errCode;
+
+}
 
 //RBFM_ScanIterator section of code
 
