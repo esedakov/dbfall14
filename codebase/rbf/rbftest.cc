@@ -1457,12 +1457,12 @@ int RBFTest_My_4(RecordBasedFileManager *rbfm) {
 	int size = 0;
 	void *record = malloc(100);
 	int numRecords = 20;
-	char* names[] = { "AaaaaA", "BbbbbbbbbB", "CcccccC", "DdddddD", "EeeeE" };
+	char const* names[] = { "AaaaaA", "BbbbbbbbbB", "CcccccC", "DdddddD", "EeeeE" };
 	// Insert records
-	for(i = 0; i < numRecords; i++)
+	for(i = 0; i < (unsigned int)numRecords; i++)
 	{
 		size = 0;
-		char* str = names[i % 5];
+		char const* str = names[i % 5];
 		// Insert a record into a file
 		prepareRecord(strlen(str), str, i % 10, i * 1.0f, 5000, record, &size);
 		rc = rbfm->insertRecord(fileHandle, recordDescriptor, record, rid);

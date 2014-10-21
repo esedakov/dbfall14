@@ -3,6 +3,7 @@
 
 #include <string>
 #include <vector>
+#include <map>
 
 #include "../rbf/pfm.h"
 
@@ -16,6 +17,8 @@ typedef struct
   unsigned slotNum;
 } RID;
 
+bool operator<(const RID& x, const RID& y);
+bool operator==(const RID& x, const RID& y);
 
 // Attribute
 typedef enum { TypeInt = 0, TypeReal, TypeVarChar } AttrType;
@@ -63,6 +66,12 @@ public:
 
 	// "data" follows the same format as RecordBasedFileManager::insertRecord()
 	RC getNextRecord(RID &rid, void *data);
+	/* returns rid:
+	 * 		if record is a TombStone, then an actual rid is returned
+	 * 		if record is deleted, then rid of {0,0} (i.e. page number = 0 and slot number = 0) is returned (that is a first header page, so such rid is incorrect)
+	 * 		otherwise (regular record), same record id is returned, as was returned by the prior execution of getNextRecord.\
+	**/
+	RID getActualRecordId();
 	RC close();
 public:
 	PageNum	_pagenum;

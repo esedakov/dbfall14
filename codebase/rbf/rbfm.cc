@@ -558,7 +558,12 @@ RC RecordBasedFileManager::readRecord(FileHandle &fileHandle, const vector<Attri
     	RID* ptrNewRid = (RID*)ptrRecord;
 
     	//now go ahead and try to read this record
-    	return readRecord(fileHandle, recordDescriptor, *ptrNewRid, data);
+    	errCode = readRecord(fileHandle, recordDescriptor, *ptrNewRid, data);
+
+    	//free data page (fixing memory leak)
+    	free(dataPage);
+
+    	return errCode;
     }
     //end section for project 2
 
@@ -1369,15 +1374,51 @@ RC RecordBasedFileManager::reorganizeFile(FileHandle &fileHandle, const vector<A
 	RID itRid = {0, 0};
 	void* data = malloc(PAGE_SIZE);
 	memset(data, 0, PAGE_SIZE);
+
+	//create map for storing actual rids for those cases when records are tombStones
+	std::map<RID, RID> tombStoneRids;
+
 	vector<RID> rids;
+
 	while(iterator.getNextRecord(itRid, data) != RBFM_EOF)
 	{
-		insertRecord(tempFileHandle, recordDescriptor, data, itRid);
+
+		//get rid (if it is a tombStone, then a returned rid is not going to equal to itRid)
+		RID updatedRid = iterator.getActualRecordId();
+
+		if( updatedRid.pageNum != 0 &&	//make sure that returned rid is actually correct
+				(
+				 updatedRid.pageNum != itRid.pageNum ||		//check if it got changed (i.e. a TombStone case)
+				 updatedRid.slotNum != itRid.slotNum
+				)
+		  )
+		{
+			//insert rid pointed by TombStone
+			tombStoneRids.insert(std::pair<RID, RID>(updatedRid, itRid));
+		}
+
+		//tombStoneRids.find(itRid);
+		std::map<RID, RID>::iterator map_iter;
+
+		//check if rid (from getNextRecord) points to the data that was already processed
+		if( (map_iter = tombStoneRids.find(itRid)) != tombStoneRids.end() )
+		{
+
+			//if it was already processed, then do not include it again
+			//and remove the rid from map
+			tombStoneRids.erase(map_iter);
+		}
+		else
+		{
+			//otherwise, insert this record
+			insertRecord(tempFileHandle, recordDescriptor, data, itRid);
+
+			rids.push_back(itRid);
+		}
 
 		//debug information (subject for later removal)
-		printRecord(recordDescriptor, data);
+		//printRecord(recordDescriptor, data);
 
-		rids.push_back(itRid);
 	}
 
 	//delete records from the original file
@@ -1564,6 +1605,8 @@ RC	RBFM_ScanIterator::getNextRecord(RID &rid, void* data)
 					case NE_OP:
 						isMatching = cmpValue != 0;
 						break;
+					default:
+						return -1;
 					}
 				}
 				else
@@ -1610,3 +1653,130 @@ RC	RBFM_ScanIterator::getNextRecord(RID &rid, void* data)
 	//return success
 	return errCode;
 }
+
+RID RBFM_ScanIterator::getActualRecordId()
+{
+    RID actual_rid = {0,0};
+
+    //check if internal data members make sense (i.e. page number is within [1, max pages-1]
+    if( _pagenum == 0 || _pagenum >= _fileHandle.getNumberOfPages() )
+    {
+    	return actual_rid; //rid is not setup correctly
+    }
+
+    //allocate array for storing contents of the data page
+    void* dataPage = malloc(PAGE_SIZE);
+    memset(dataPage, 0, PAGE_SIZE);
+
+    //read data page
+    if(  _fileHandle.readPage(_pagenum, dataPage) != 0 )
+    {
+    	//deallocate dataPage
+    	free(dataPage);
+
+    	//read failed
+    	return actual_rid;
+    }
+
+    /*
+	 * data page has a following format:
+	 * [list of records without any spaces in between][free space for records][list of directory slots][(number of slots):unsigned int][(offset from page start to the start of free space):unsigned int]
+	 * ^                                                                      ^                       ^                                                                                                 ^
+	 * start of page                                                          start of dirSlot        end of dirSlot                                                                          end of page
+	 */
+
+    //get pointer to the end of directory slots
+    PageDirSlot* ptrEndOfDirSlot = (PageDirSlot*)((char*)dataPage + PAGE_SIZE - 2 * sizeof(unsigned int));
+
+    //find out number of directory slots
+    unsigned int numSlots = *((unsigned int*)ptrEndOfDirSlot);
+
+    unsigned int olderSlotNumber = (_slotnum <= 0 ? 0 : _slotnum - 1);
+
+    //check if rid is correct in terms of indexed slot
+    if( olderSlotNumber >= numSlots )
+    {
+    	//deallocate data page
+    	free(dataPage);
+
+    	return actual_rid; //rid is not setup correctly
+    }
+
+    //get slot
+    PageDirSlot* curSlot = (PageDirSlot*)(ptrEndOfDirSlot - olderSlotNumber - 1);
+
+    //find slot offset
+    unsigned int offRecord = curSlot->_offRecord;
+    unsigned int szRecord = curSlot->_szRecord;
+
+    //check if slot attributes make sense
+    if( offRecord == 0 && szRecord == 0 )
+    {
+    	//deallocate data page
+    	free(dataPage);
+
+    	return actual_rid;	//directory slot is for the deleted record
+    }
+
+    //determine pointer to the record
+    char* ptrRecord = (char*)(dataPage) + offRecord;
+
+    //in case the record in this page is a TombStone
+    if( szRecord == (unsigned int)-1 )
+    {
+    	//redirect to a different location; (page, slot) is specified in the record's body
+    	RID* ptrNewRid = (RID*)ptrRecord;
+
+    	//create buffer for reading the redirected page
+    	void* redir_page = malloc(PAGE_SIZE);
+    	memset(redir_page, 0, PAGE_SIZE);
+
+    	//setup working instance of record based file manager
+    	RecordBasedFileManager *rbfm = RecordBasedFileManager::instance();
+
+    	//now go ahead and try to read this record
+    	if( rbfm->readRecord(_fileHandle, _recordDescriptor, *ptrNewRid, redir_page) < 0 )
+    	{
+    		//free buffer for page
+    		free(dataPage);
+    		free(redir_page);
+
+    		return actual_rid;
+    	}
+
+    	//check if pointer to new rid makes sense
+    	if( ptrNewRid->pageNum == 0 || ptrNewRid->slotNum == (unsigned int)-1 )
+    	{
+    		//free buffer for page
+    		free(dataPage);
+    		free(redir_page);
+
+    		return actual_rid;
+    	}
+
+    	//assign redirected rid
+    	actual_rid.pageNum = ptrNewRid->pageNum;
+    	actual_rid.slotNum = ptrNewRid->slotNum;
+    }
+    else
+    {
+    	actual_rid.pageNum = _pagenum;
+    	actual_rid.slotNum = olderSlotNumber;
+    }
+
+    //free buffer for page
+    free(dataPage);
+
+    //return rid
+    return actual_rid;
+}
+
+bool operator<(const RID& x, const RID& y)
+{
+	return x.pageNum < y.pageNum || x.slotNum < y.slotNum;
+};
+
+bool operator==(const RID& x, const RID& y)
+{
+	return x.pageNum == y.pageNum && x.slotNum == y.slotNum;
+};
