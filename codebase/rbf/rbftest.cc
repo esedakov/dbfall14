@@ -1395,7 +1395,13 @@ int RBFTest_My_3(RecordBasedFileManager *rbfm, vector<RID> &rids, vector<int> &s
 	}
 //end of section # 9 - read all record again
 	cout << "CASE#10" << endl;
-//10. delete all records
+//10. reorganize file
+	rc = rbfm->reorganizeFile(fileHandle, recordDescriptor1485);
+	assert(rc == success);
+	//for testing essentially need to debug, since it is the only way to know whether records were actually moved and in what position
+//end of section # 10 - reorganize file
+	cout << "CASE#11" << endl;
+//11. delete all records
 	rc = rbfm->deleteRecords(fileHandle);
 	assert(rc == success);
     // Close the file "test_5"
@@ -1511,6 +1517,7 @@ int main()
     remove("test_my_1");
     remove("test_5");
     remove("test_6");
+    remove("tempFile");
 
     /*RBFTest_1(pfm);
     RBFTest_2(pfm);

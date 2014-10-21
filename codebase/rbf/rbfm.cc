@@ -524,7 +524,7 @@ RC RecordBasedFileManager::readRecord(FileHandle &fileHandle, const vector<Attri
     unsigned int numSlots = *((unsigned int*)ptrEndOfDirSlot);
 
     //check if rid is correct in terms of indexed slot
-    if( rid.slotNum > numSlots )
+    if( rid.slotNum >= numSlots )
     {
     	//deallocate data page
     	free(dataPage);
@@ -1343,7 +1343,7 @@ RC RecordBasedFileManager::reorganizeFile(FileHandle &fileHandle, const vector<A
 	const string tempFile="tempFile";
 
 	//create an empty file using pfm
-	if( (errCode = _pfm->createFile( tempFile.c_str() )) != 0 )
+	if( (errCode = createFile(tempFile)) != 0 )
 		return errCode;
 
 	//create a handle for the file
@@ -1373,6 +1373,10 @@ RC RecordBasedFileManager::reorganizeFile(FileHandle &fileHandle, const vector<A
 	while(iterator.getNextRecord(itRid, data) != RBFM_EOF)
 	{
 		insertRecord(tempFileHandle, recordDescriptor, data, itRid);
+
+		//debug information (subject for later removal)
+		printRecord(recordDescriptor, data);
+
 		rids.push_back(itRid);
 	}
 
@@ -1474,6 +1478,9 @@ RC	RBFM_ScanIterator::getNextRecord(RID &rid, void* data)
 
 				//set slot to the start of the page
 				_slotnum = 0;
+
+				//loop again
+				continue;
 			}
 
 			//if page number exceeds the maximum stored in this file, then
@@ -1519,42 +1526,50 @@ RC	RBFM_ScanIterator::getNextRecord(RID &rid, void* data)
 			}
 
 			//if this is a comparing field, then
-			if( i->name == _conditionAttribute )
+			if( i->name == _conditionAttribute || _compO == NO_OP )
 			{
-				int cmpValue = 0;
-				if( i->type == TypeVarChar )
+				//define variable to store boolean result, whether condition matches
+				bool isMatching = false;
+
+				if( _compO != NO_OP )
 				{
-					cmpValue = strncmp((char*)ptrField, (char*)_value, szOfField);
+					int cmpValue = 0;
+					if( i->type == TypeVarChar )
+					{
+						cmpValue = strncmp((char*)ptrField, (char*)_value, szOfField);
+					}
+					else
+					{
+						cmpValue = memcmp(ptrField, _value, szOfField);
+					}
+
+					//determine if condition matches
+					switch(_compO)
+					{
+					case EQ_OP:
+						isMatching = cmpValue == 0;
+						break;
+					case LT_OP:
+						isMatching = cmpValue < 0;
+						break;
+					case GT_OP:
+						isMatching = cmpValue > 0;
+						break;
+					case LE_OP:
+						isMatching = cmpValue <= 0;
+						break;
+					case GE_OP:
+						isMatching = cmpValue >= 0;
+						break;
+					case NE_OP:
+						isMatching = cmpValue != 0;
+						break;
+					}
 				}
 				else
 				{
-					cmpValue = memcmp(ptrField, _value, szOfField);
-				}
-
-				//determine if condition matches
-				bool isMatching = false;
-				switch(_compO)
-				{
-				case EQ_OP:
-					isMatching = cmpValue == 0;
-					break;
-				case LT_OP:
-					isMatching = cmpValue < 0;
-					break;
-				case GT_OP:
-					isMatching = cmpValue > 0;
-					break;
-				case LE_OP:
-					isMatching = cmpValue <= 0;
-					break;
-				case GE_OP:
-					isMatching = cmpValue >= 0;
-					break;
-				case NE_OP:
-					isMatching = cmpValue != 0;
-					break;
-				default:
-					return RBFM_EOF;
+					//iterate over all fields
+					isMatching = true;
 				}
 
 				//if it matches, then
