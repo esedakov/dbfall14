@@ -2,6 +2,7 @@
 #include <stdio.h>
 #include <sys/stat.h>
 #include <string.h>
+#include <stdlib.h>
 
 PagedFileManager* PagedFileManager::_pf_manager = 0;
 
@@ -83,8 +84,8 @@ RC PagedFileManager::createFile(const char *fileName)
 	//create string representing file name
 	std::string name = std::string(fileName);
 
-	//create file information entity (by default set created file to be user accessible and modifiable)
-	FileInfo info = FileInfo(name, 0, 0);//, user_access);
+	//create file information entity
+	FileInfo info = FileInfo(name, 0, 0);
 
 	//insert record into hash-map (_files)
 	if( _files.insert( std::pair<std::string, FileInfo>(name, info) ).second == false )
@@ -151,20 +152,14 @@ RC PagedFileManager::openFile(const char *fileName, FileHandle &fileHandle)
 	//get the record of this file from _files
 	if( ( iter = _files.find(std::string(fileName)) ) == _files.end() )
 	{
-		//have been created by previous execution
-		struct stat stFileInfo;
-		if( stat(fileName, &stFileInfo) != 0 )
-			return -1;
-		int size_in_pages = stFileInfo.st_size / PAGE_SIZE;
 
 		//create file information entity (by default set created file to be user accessible and modifiable)
-		FileInfo info = FileInfo(fileName, 0, size_in_pages);//, user_access);
+		FileInfo info = FileInfo(fileName, 0, 0);//, user_access);
 
 		//insert record into hash-map (_files)
 		if( _files.insert( std::pair<std::string, FileInfo>(fileName, info) ).second == false )
 			return -3;	//entry with this FILE* already exists
-		//return -7;	//error removed, since it appears to be possible to open a file that was not created by original DB
-
+		//return -7; //error removed, since it appears to be possible to open a file that was not created by original DB
 	}
 
 	//make sure that given file handler is not used for any file
@@ -336,29 +331,27 @@ RC FileHandle::appendPage(const void *data)
 	//increment page count
 	_info->_numPages++;
 
-	//update header with number of pages
-
-	//acquire first header
-	void* headerPage = malloc(PAGE_SIZE);
-	int errCode = 0;
-	if( (errCode = readPage(0, headerPage)) != 0 )
-	{
-		free(headerPage);
-
-		//return error code
-		return errCode;
-	}
-
-	//cast to FirstPageHeader
-	FirstPageHeader* fph = (FirstPageHeader*)headerPage;
-
-	free(headerPage);
-
-	//update the page number
-	fph->_nextHeaderPageId++;
-
 	//success, return 0
 	return 0;
+}
+
+void FileHandle::writeBackNumOfPages()
+{
+	//allocate buffer for the first header page
+	void* firstPageBuffer = malloc(PAGE_SIZE);
+
+	//null it
+	memset(firstPageBuffer, 0, PAGE_SIZE);
+
+	//try to read the first header page
+	if( readPage(0, firstPageBuffer) != 0 )
+		return;
+
+	//increment the page count
+	((Header*)firstPageBuffer)->_totFileSize = _info->_numPages;
+
+	//free buffer
+	free(firstPageBuffer);
 }
 
 unsigned FileHandle::getNumberOfPages()
@@ -374,8 +367,8 @@ unsigned FileHandle::getNumberOfPages()
 }
 
 
-FileInfo::FileInfo(std::string name, unsigned int numOpen, unsigned int numPages)
-: _name(name), _numOpen(numOpen), _numPages(numPages)
+FileInfo::FileInfo(std::string name, unsigned int numOpen, PageNum numpages)
+: _name(name), _numOpen(numOpen), _numPages(numpages)
 {
 	//do nothing
 }
@@ -406,7 +399,7 @@ void FileHandle::setAccess(access_flag flag, bool& success)
 	}
 
 	//set access
-	((FirstPageHeader*)data)->_flag = flag;
+	((Header*)data)->_access = flag;
 
 	//success
 	success = true;
@@ -416,7 +409,7 @@ void FileHandle::setAccess(access_flag flag, bool& success)
 
 access_flag FileHandle::getAccess(bool& success)
 {
-	access_flag flag = user_access;
+	access_flag flag = user_can_modify;
 
 	//allocate data for first header page
 	void* data = malloc(PAGE_SIZE);
@@ -430,7 +423,7 @@ access_flag FileHandle::getAccess(bool& success)
 	}
 
 	//get access
-	flag = ((FirstPageHeader*)data)->_flag;
+	flag = ((Header*)data)->_access;
 
 	free(data);
 
