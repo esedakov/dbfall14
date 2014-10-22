@@ -5,6 +5,8 @@
 #include <string>
 #include <vector>
 
+#include <map>
+
 #include "../rbf/rbfm.h"
 
 using namespace std;
@@ -21,16 +23,33 @@ using namespace std;
 //  }
 //  rmScanIterator.close();
 
-class RM_ScanIterator {
+class RM_ScanIterator
+{
 public:
-  RM_ScanIterator() {};
-  ~RM_ScanIterator() {};
+	RM_ScanIterator();
+	~RM_ScanIterator();
 
-  // "data" follows the same format as RelationManager::insertTuple()
-  RC getNextTuple(RID &rid, void *data) { return RM_EOF; };
-  RC close() { return -1; };
+	// "data" follows the same format as RelationManager::insertTuple()
+	RC getNextTuple(RID &rid, void *data);
+	RC close();
+private:
+	RBFM_ScanIterator _iterator;
 };
 
+struct ColumnInfo
+{
+	//column name
+	string _name;
+
+	//unique identifier for column
+	unsigned int _columnId;
+
+	//type of column, which is either string OR integer??? => need to make a choice
+	//string _type;	//spell out the types, like "REAL" or "VARCHAR" OR "INT"
+	//int _type;	//create a enum and within it a unique identifier for each type
+
+	unsigned int _length;
+};
 
 // Relation Manager
 class RelationManager
@@ -84,6 +103,12 @@ protected:
 
 private:
   static RelationManager *_rm;
+
+  //hash map for quick lookup of table inside the catalog's Table of tables
+  std::map<string, int> _catalogTable;	//<table name, tableId>	(subject to further modification)
+
+  //hash map for quick lookup of column inside the catalog's Table of columns
+  std::map< int, std::vector< ColumnInfo > > _catatlogColumn;	//<table name, <table id, column id>>
 };
 
 #endif
