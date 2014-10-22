@@ -83,8 +83,8 @@ RC PagedFileManager::createFile(const char *fileName)
 	//create string representing file name
 	std::string name = std::string(fileName);
 
-	//create file information entity
-	FileInfo info = FileInfo(name, 0, 0);
+	//create file information entity (by default set created file to be user accessible and modifiable)
+	FileInfo info = FileInfo(name, 0, 0);//, user_access);
 
 	//insert record into hash-map (_files)
 	if( _files.insert( std::pair<std::string, FileInfo>(name, info) ).second == false )
@@ -151,7 +151,20 @@ RC PagedFileManager::openFile(const char *fileName, FileHandle &fileHandle)
 	//get the record of this file from _files
 	if( ( iter = _files.find(std::string(fileName)) ) == _files.end() )
 	{
-		return -7;	//no record found
+		//have been created by previous execution
+		struct stat stFileInfo;
+		if( stat(fileName, &stFileInfo) != 0 )
+			return -1;
+		int size_in_pages = stFileInfo.st_size / PAGE_SIZE;
+
+		//create file information entity (by default set created file to be user accessible and modifiable)
+		FileInfo info = FileInfo(fileName, 0, size_in_pages);//, user_access);
+
+		//insert record into hash-map (_files)
+		if( _files.insert( std::pair<std::string, FileInfo>(fileName, info) ).second == false )
+			return -3;	//entry with this FILE* already exists
+		//return -7;	//error removed, since it appears to be possible to open a file that was not created by original DB
+
 	}
 
 	//make sure that given file handler is not used for any file
@@ -323,6 +336,27 @@ RC FileHandle::appendPage(const void *data)
 	//increment page count
 	_info->_numPages++;
 
+	//update header with number of pages
+
+	//acquire first header
+	void* headerPage = malloc(PAGE_SIZE);
+	int errCode = 0;
+	if( (errCode = readPage(0, headerPage)) != 0 )
+	{
+		free(headerPage);
+
+		//return error code
+		return errCode;
+	}
+
+	//cast to FirstPageHeader
+	FirstPageHeader* fph = (FirstPageHeader*)headerPage;
+
+	free(headerPage);
+
+	//update the page number
+	fph->_nextHeaderPageId++;
+
 	//success, return 0
 	return 0;
 }
@@ -349,4 +383,58 @@ FileInfo::FileInfo(std::string name, unsigned int numOpen, unsigned int numPages
 FileInfo::~FileInfo()
 {
 	//do nothing
+}
+
+void FileHandle::setAccess(access_flag flag, bool& success)
+{
+	//this is a function added in the second project, due to necessity to include system/user permissions for specific files, which
+	//contain a sensitive information, such as catalog
+
+	//this function brakes an abstraction in which file handler does not know what goes on top of its class, i.e. it accesses first header page and
+	//modifies information about the system flag.
+
+	//allocate data for first header page
+	void* data = malloc(PAGE_SIZE);
+
+	//read this header
+	if( readPage(0, data) != 0 )
+	{
+		//abort procedure
+		success = false;
+		free(data);
+		return;
+	}
+
+	//set access
+	((FirstPageHeader*)data)->_flag = flag;
+
+	//success
+	success = true;
+
+	free(data);
+}
+
+access_flag FileHandle::getAccess(bool& success)
+{
+	access_flag flag = user_access;
+
+	//allocate data for first header page
+	void* data = malloc(PAGE_SIZE);
+
+	//read this header
+	if( readPage(0, data) != 0 )
+	{
+		success = false;
+		free(data);
+		return flag;
+	}
+
+	//get access
+	flag = ((FirstPageHeader*)data)->_flag;
+
+	free(data);
+
+	//success
+	success = true;
+	return flag;
 }

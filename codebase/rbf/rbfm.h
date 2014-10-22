@@ -191,52 +191,6 @@ private:
 #define MAX_SIZE_OF_RECORD (PAGE_SIZE - sizeof(unsigned int) - sizeof(unsigned int) - sizeof(PageDirSlot))
 
 /*
- * type for number of page IDs in a header page
-**/
-typedef unsigned PageIdNum;
-
-/*
- * type of page id
-**/
-typedef unsigned PageId;
-
-/*
- * information about the page
-**/
-struct PageInfo
-{
-	/*
-	 * page id (unsigned integer) - index from 0 to N-1, where N is total number of pages in a file and the fact that 0th page is a header
-	**/
-	PageId _pageid;
-	/*
-	 * number of bytes free
-	**/
-	unsigned int _numFreeBytes;
-};
-
-#define NUM_OF_PAGE_IDS ( PAGE_SIZE - sizeof(PageNum) - sizeof(PageIdNum) ) / sizeof(PageInfo)
-
-/*
- * header page
-**/
-struct Header
-{
-	/*
-	 * page number of the next header page
-	**/
-	PageNum _nextHeaderPageId;
-	/*
-	 * number of page IDs used in this page header
-	**/
-	PageIdNum _numUsedPageIds;
-	/*
-	 * array of page IDs, occupying the remaining part of the header file
-	**/
-	PageInfo _arrOfPageIds[ NUM_OF_PAGE_IDS ];
-};
-
-/*
  * prototype for the stand-alone function for determining size of the record (in bytes)
 **/
 unsigned int sizeOfRecord(const vector<Attribute> &recordDescriptor, const void *data);
