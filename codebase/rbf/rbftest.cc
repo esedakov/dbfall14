@@ -1,4 +1,4 @@
-/*#include <iostream>
+#include <iostream>
 #include <fstream>
 #include <string>
 #include <cassert>
@@ -1040,4 +1040,4 @@ int main()
     cout << "Score for test #1 ~ #10 is: " << total << " / 40" << endl;
     return 0;
 }
-*/
+
