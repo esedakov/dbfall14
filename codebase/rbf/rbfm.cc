@@ -496,7 +496,7 @@ RC RecordBasedFileManager::readRecord(FileHandle &fileHandle, const vector<Attri
 
     if( rid.pageNum == 0 || rid.pageNum >= fileHandle.getNumberOfPages() )
     {
-    	return -28; //rid is not setup correctly
+    	//return -28; //rid is not setup correctly
     }
 
     //allocate array for storing contents of the data page

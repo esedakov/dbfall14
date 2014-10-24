@@ -149,12 +149,17 @@ RC PagedFileManager::openFile(const char *fileName, FileHandle &fileHandle)
 	//iterator that should point to the item in _files
 	std::map<std::string, FileInfo>::iterator iter;
 
+	bool setup_file_info = false;
+
 	//get the record of this file from _files
 	if( ( iter = _files.find(std::string(fileName)) ) == _files.end() )
 	{
 
 		//create file information entity (by default set created file to be user accessible and modifiable)
 		FileInfo info = FileInfo(fileName, 0, 0);//, user_access);
+
+		//mark this file handle to be in need to setup a file info
+		setup_file_info = true;
 
 		//insert record into hash-map (_files)
 		if( _files.insert( std::pair<std::string, FileInfo>(fileName, info) ).second == false )
@@ -183,6 +188,21 @@ RC PagedFileManager::openFile(const char *fileName, FileHandle &fileHandle)
 
 	//increment "file open instance" counter
 	(fileHandle._info->_numOpen)++;
+
+	if( setup_file_info )
+	{
+		//allocate memory buffer for 1st page
+		void* data = malloc(PAGE_SIZE);
+
+		int errCode = 0;
+
+		//explicitly read the number of pages from the file's first header
+		if( (errCode = fileHandle.readPage(0, data)) != 0 )
+			return errCode;
+
+		//get the page number
+		fileHandle._info->_numPages = ((Header*)data)->_totFileSize;
+	}
 
 	//file is opened successfully => return 0
 	return 0;
@@ -237,7 +257,7 @@ RC FileHandle::readPage(PageNum pageNum, void *data)
 	//check that pageNum is within the boundaries of a given file
     if( pageNum >= getNumberOfPages() )
     {
-    	return -10;
+    	//return -10;
     }
 
     //check that data is not corrupted (i.e. data ptr is not null)
@@ -349,6 +369,9 @@ void FileHandle::writeBackNumOfPages()
 
 	//increment the page count
 	((Header*)firstPageBuffer)->_totFileSize = _info->_numPages;
+
+	if( writePage(0, firstPageBuffer) != 0 )
+		return;
 
 	//free buffer
 	free(firstPageBuffer);

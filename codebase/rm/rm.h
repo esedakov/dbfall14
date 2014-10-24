@@ -32,24 +32,12 @@ public:
 	// "data" follows the same format as RelationManager::insertTuple()
 	RC getNextTuple(RID &rid, void *data);
 	RC close();
+	RBFM_ScanIterator getIterator();
 private:
 	RBFM_ScanIterator _iterator;
 };
 
-struct ColumnInfo
-{
-	//column name
-	string _name;
-
-	//unique identifier for column
-	unsigned int _columnId;
-
-	//type of column, which is either string OR integer??? => need to make a choice
-	//string _type;	//spell out the types, like "REAL" or "VARCHAR" OR "INT"
-	//int _type;	//create a enum and within it a unique identifier for each type
-
-	unsigned int _length;
-};
+struct ColumnInfo;
 
 // Relation Manager
 class RelationManager
@@ -86,6 +74,17 @@ public:
       const vector<string> &attributeNames, // a list of projected attributes
       RM_ScanIterator &rm_ScanIterator);
 
+  //delete catalog
+  void cleanup();
+
+  //create catalog tables
+  void createCatalog();
+
+  //create a record inside table of Tables
+  RC createRecordInTables(FileHandle tableHandle, std::vector<Attribute> table, const char* tableFields, int tableId);
+
+  //create record inside table of Columns
+  RC createRecordInColumns(FileHandle columnHandle, std::vector<Attribute> column, int index, unsigned int tableId, const char * columnName);
 
 // Extra credit
 public:
@@ -104,11 +103,43 @@ protected:
 private:
   static RelationManager *_rm;
 
+  RecordBasedFileManager* _rbfm;
+
   //hash map for quick lookup of table inside the catalog's Table of tables
   std::map<string, int> _catalogTable;	//<table name, tableId>	(subject to further modification)
 
   //hash map for quick lookup of column inside the catalog's Table of columns
-  std::map< int, std::vector< ColumnInfo > > _catatlogColumn;	//<table name, <table id, column id>>
+  std::map< int, std::vector< ColumnInfo > > _catalogColumn;	//<table id, ColumnInfo >
 };
+
+
+//after this line, our constants, structures, and data types were added
+
+struct ColumnInfo
+{
+	//column name
+	string _name;
+
+	//unique identifier for column
+	//unsigned int _columnId;
+
+	AttrType _type;	//create a enum and within it a unique identifier for each type
+
+	unsigned int _length;
+
+	RID _rid;
+};
+
+//constants used to identify file names for two system tables - table and column
+#define CATALOG_TABLE_NAME "table"
+#define CATALOG_COLUMN_NAME "column"
+
+//table IDs for the table and column
+#define CATALOG_TABLE_ID 1
+#define CATALOG_COLUMN_ID 2
+
+//any name (table, column, field, file, ...) stored inside DB cannot exceed the maximum size of
+//record minus 4 bytes for storing its actual size (due to VarChar format)
+#define MAX_SIZE_OF_NAME_IN_DB MAX_SIZE_OF_RECORD - sizeof(unsigned int)
 
 #endif

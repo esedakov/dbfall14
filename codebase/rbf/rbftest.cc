@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 #include <iostream>
 #include <fstream>
 #include <string>
@@ -84,22 +85,22 @@ void createRecordDescriptor(vector<Attribute> &recordDescriptor) {
 
     Attribute attr;
     attr.name = "EmpName";
-    attr.type = TypeVarChar;
+    attr.type = AttrType(2);
     attr.length = (AttrLength)30;
     recordDescriptor.push_back(attr);
 
     attr.name = "Age";
-    attr.type = TypeInt;
+    attr.type = AttrType(0);
     attr.length = (AttrLength)4;
     recordDescriptor.push_back(attr);
 
     attr.name = "Height";
-    attr.type = TypeReal;
+    attr.type = AttrType(1);
     attr.length = (AttrLength)4;
     recordDescriptor.push_back(attr);
 
     attr.name = "Salary";
-    attr.type = TypeInt;
+    attr.type = AttrType(0);
     attr.length = (AttrLength)4;
     recordDescriptor.push_back(attr);
 
@@ -115,7 +116,7 @@ void createLargeRecordDescriptor(vector<Attribute> &recordDescriptor)
         sprintf(suffix, "%d", index);
         attr.name = "attr";
         attr.name += suffix;
-        attr.type = TypeVarChar;
+        attr.type = AttrType(2);
         attr.length = (AttrLength)50;
         recordDescriptor.push_back(attr);
         index++;
@@ -123,7 +124,7 @@ void createLargeRecordDescriptor(vector<Attribute> &recordDescriptor)
         sprintf(suffix, "%d", index);
         attr.name = "attr";
         attr.name += suffix;
-        attr.type = TypeInt;
+        attr.type = AttrType(0);
         attr.length = (AttrLength)4;
         recordDescriptor.push_back(attr);
         index++;
@@ -131,7 +132,7 @@ void createLargeRecordDescriptor(vector<Attribute> &recordDescriptor)
         sprintf(suffix, "%d", index);
         attr.name = "attr";
         attr.name += suffix;
-        attr.type = TypeReal;
+        attr.type = AttrType(1);
         attr.length = (AttrLength)4;
         recordDescriptor.push_back(attr);
         index++;
@@ -149,7 +150,7 @@ void createLargeRecordDescriptor2(vector<Attribute> &recordDescriptor)
         sprintf(suffix, "%d", index);
         attr.name = "attr";
         attr.name += suffix;
-        attr.type = TypeVarChar;
+        attr.type = AttrType(2);
         attr.length = (AttrLength)2000;
         recordDescriptor.push_back(attr);
         index++;
@@ -157,7 +158,7 @@ void createLargeRecordDescriptor2(vector<Attribute> &recordDescriptor)
         sprintf(suffix, "%d", index);
         attr.name = "attr";
         attr.name += suffix;
-        attr.type = TypeInt;
+        attr.type = AttrType(0);
         attr.length = (AttrLength)4;
         recordDescriptor.push_back(attr);
         index++;
@@ -165,7 +166,7 @@ void createLargeRecordDescriptor2(vector<Attribute> &recordDescriptor)
         sprintf(suffix, "%d", index);
         attr.name = "attr";
         attr.name += suffix;
-        attr.type = TypeReal;
+        attr.type = AttrType(1);
         attr.length = (AttrLength)4;
         recordDescriptor.push_back(attr);
         index++;
@@ -1041,3 +1042,5 @@ int main()
     return 0;
 }
 
+=======
+>>>>>>> dcada1dbf065e699fd0e6ddc2320bce0abeef74f

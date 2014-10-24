@@ -163,6 +163,10 @@ int RBFTest_11b(RecordBasedFileManager *rbfm) {
 	for (int i = 0; i < numRecords; i++) {
 		memset(record, 0, 1000);
 		memset(returnedData, 0, 1000);
+		if( i == 70 )
+		{
+			memset(record, 0, 1000);
+		}
 		rc = rbfm->readRecord(fileHandle, recordDescriptor, rids[i],
 				returnedData);
 		if (rc != success) {
@@ -197,8 +201,8 @@ int RBFTest_11b(RecordBasedFileManager *rbfm) {
 		return -1;
 	}
 	
-	remove("test_11a");
-	remove("test_11a_rids");
+	//remove("test_11a");
+	//remove("test_11a_rids");
 
 	return 0;
 }
