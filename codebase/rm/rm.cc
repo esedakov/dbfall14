@@ -5,49 +5,50 @@
 
 RelationManager* RelationManager::_rm = 0;
 
-RelationManager* RelationManager::instance() {
-	if (!_rm)
-		_rm = new RelationManager();
+RelationManager* RelationManager::instance()
+{
+    if(!_rm)
+        _rm = new RelationManager();
 
-	return _rm;
+    return _rm;
 }
 
-void RelationManager::cleanup() {
+void RelationManager::cleanup()
+{
 	remove(CATALOG_TABLE_NAME);
 	remove(CATALOG_COLUMN_NAME);
 }
 
 RC RelationManager::createRecordInTables(FileHandle tableHandle,
-		std::vector<Attribute> table, const char* tableName, int tableId) //NOT TESTED
-		{
+		std::vector<Attribute> table, const char* tableName, int tableId, RID& rid)	//NOT TESTED
+{
 	RC errCode = 0;
 
 	//determine lengths of VarChar fields
-	unsigned int lenOfTableNameField = strlen(tableName) - 1; //-1 accounts for removing the null-character from the size of table's name
+	unsigned int lenOfTableNameField = strlen(tableName) - 1;	//-1 accounts for removing the null-character from the size of table's name
 
 	//create buffer for storing record
 	void* recordData = malloc(sizeof(unsigned int) + //table_id
-			(sizeof(unsigned int) + lenOfTableNameField) + //size + table_name
-			(sizeof(unsigned int) + lenOfTableNameField)); //size + file_name
+				(sizeof(unsigned int) + lenOfTableNameField) + //size + table_name
+				(sizeof(unsigned int) + lenOfTableNameField)); //size + file_name
 
 	//copy fields into record's buffer
 	char* p = (char*) recordData;
 	//table id
-	((unsigned int*) p)[0] = tableId;
+	((unsigned int*)p)[0] = tableId;
 	p += sizeof(unsigned int);
 	//table name's length
-	((unsigned int*) p)[0] = lenOfTableNameField;
+	((unsigned int*)p)[0] = lenOfTableNameField;
 	p += sizeof(unsigned int);
 	//table name
 	memcpy(p, tableName, lenOfTableNameField);
 	p += lenOfTableNameField;
 	//file name's length
-	((unsigned int*) p)[0] = lenOfTableNameField;
+	((unsigned int*)p)[0] = lenOfTableNameField;
 	p += sizeof(unsigned int);
 	//file name
 	memcpy(p, tableName, lenOfTableNameField);
 
-	RID rid;
 	//insert record
 	if ((errCode = _rbfm->insertRecord(tableHandle, table, recordData, rid))
 			!= 0) {
@@ -68,11 +69,11 @@ RC RelationManager::createRecordInTables(FileHandle tableHandle,
 RC RelationManager::createRecordInColumns(FileHandle columnHandle,
 		std::vector<Attribute> column, int index, unsigned int tableId,
 		const char * columnName) //NOT TESTED
-		{
+{
 	RC errCode = 0;
 
 	//determine lengths of VarChar fields
-	unsigned int lenOfColumnNameField = strlen(columnName) - 1; //-1 accounts for removing the null-character from the size of column's name
+	unsigned int lenOfColumnNameField = strlen(columnName) - 1;	//-1 accounts for removing the null-character from the size of column's name
 
 	//create buffer for storing record
 	void* recordData = malloc(sizeof(unsigned int) + //table_id
@@ -83,19 +84,19 @@ RC RelationManager::createRecordInColumns(FileHandle columnHandle,
 	//copy fields into record's buffer
 	char* p = (char*) recordData;
 	//table id
-	((unsigned int*) p)[0] = tableId;
+	((unsigned int*)p)[0] = tableId;
 	p += sizeof(unsigned int);
 	//column name's length
-	((unsigned int*) p)[0] = lenOfColumnNameField;
+	((unsigned int*)p)[0] = lenOfColumnNameField;
 	p += sizeof(unsigned int);
 	//column name
 	memcpy(p, columnName, lenOfColumnNameField);
 	p += lenOfColumnNameField;
 	//column type
-	((unsigned int*) p)[0] = column[index].type;
+	((unsigned int*)p)[0] = column[index].type;
 	p += sizeof(unsigned int);
 	//column length
-	((unsigned int*) p)[0] = column[index].length;
+	((unsigned int*)p)[0] = column[index].length;
 
 	RID rid;
 	//insert record
@@ -115,7 +116,7 @@ RC RelationManager::createRecordInColumns(FileHandle columnHandle,
 	return errCode;
 }
 
-void RelationManager::createCatalog() //NOT TESTED
+void RelationManager::createCatalog()	//NOT TESTED
 {
 	//from project description:
 	//	It is mandatory to store the catalog information by using the RBF layer functions.
@@ -149,9 +150,10 @@ void RelationManager::createCatalog() //NOT TESTED
 		exit(-1);
 	}
 
+	//1. insert record about table Tables into Tables => {TABLE_ID=1, TABLE_NAME="Tables", FILE_NAME="Tables"}
 	//Tables table with the following attributes (table-id, table-name, file-name)
 	std::vector<Attribute> table;
-	const char* tableDescFields[] = { "table-id", "table-name", "file-name" };
+	const char* tableDescFields[] = {"table-id", "table-name", "file-name"};
 
 	table.push_back(
 			(Attribute) {tableDescFields[0], AttrType(0), sizeof(unsigned int)});
@@ -160,63 +162,81 @@ void RelationManager::createCatalog() //NOT TESTED
 	table.push_back(
 			(Attribute) {tableDescFields[2], AttrType(2), MAX_SIZE_OF_NAME_IN_DB});
 
+	RID ridTable, ridColumn;
+
 	//compose and insert record describing the TABLE
-	createRecordInTables(tableHandle, table, CATALOG_TABLE_NAME,
-			CATALOG_TABLE_ID);
+	if( createRecordInTables(tableHandle, table, CATALOG_TABLE_NAME,
+			CATALOG_TABLE_ID, ridTable) != 0 )
+	{
+		//abort
+		cleanup();
+		exit(-1);
+	}
 
+	//2. insert record about table Columns into Tables => {TABLE_ID=2, TABLE_NAME="Columns", FILE_NAME="Columns"}
 	//compose and insert record describing the COLUMN
-	createRecordInTables(tableHandle, table, CATALOG_COLUMN_NAME,
-			CATALOG_COLUMN_ID);
+	if( createRecordInTables(tableHandle, table, CATALOG_COLUMN_NAME,
+			CATALOG_COLUMN_ID, ridColumn) != 0 )
+	{
+		//abort
+		cleanup();
+		exit(-1);
+	}
 
-	//for fast lookup -> insert <table name, table id> INTO _catalogTable
-	_catalogTable.insert(std::pair<string, int>(CATALOG_TABLE_NAME, CATALOG_TABLE_ID));
-	_catalogTable.insert(std::pair<string, int>(CATALOG_COLUMN_NAME, CATALOG_COLUMN_ID));
+	//3. Insert information about Tables and Columns into Table's map => {TABLE_ID, TABLE_NAME, RID}
+	//for fast lookup -> insert <table name, table info> INTO _catalogTable
+	_catalogTable.insert(std::pair<string, TableInfo>(CATALOG_TABLE_NAME, (TableInfo){CATALOG_TABLE_ID, CATALOG_TABLE_NAME, ridTable}));
+	_catalogTable.insert(std::pair<string, TableInfo>(CATALOG_COLUMN_NAME, (TableInfo){CATALOG_COLUMN_ID, CATALOG_COLUMN_NAME, ridColumn}));
 
+	//4. Insert record about table Tables into Columns =>
+	//		{TABLE_ID=CATALOG_TABLE_ID, COLUMN_NAME=tableDescFields[#], COLUMN_TYPE=table[#].type, COLUMN_LENGTH=table[#].length}
+	//compose and insert COLUMN records for TABLES table
+	if( createRecordInColumns(columnHandle, table, 0, CATALOG_TABLE_ID, tableDescFields[0]) != 0 ||
+		createRecordInColumns(columnHandle, table, 1, CATALOG_TABLE_ID, tableDescFields[1]) != 0 ||
+		createRecordInColumns(columnHandle, table, 2, CATALOG_TABLE_ID, tableDescFields[2]) != 0 )
+	{
+		//abort
+		cleanup();
+		exit(-1);
+	}
+
+	//5. insert information about Table into Column's map => {COLUMN_NAME, TYPE_OF_FIELD, SIZE_OF_FIELD}
+	//compose list of column information
+	std::vector<ColumnInfo> tableInfo;
+	tableInfo.push_back((ColumnInfo){tableDescFields[0], TypeInt, sizeof(unsigned int)});
+	tableInfo.push_back((ColumnInfo){tableDescFields[1], TypeVarChar, MAX_SIZE_OF_NAME_IN_DB});
+	tableInfo.push_back((ColumnInfo){tableDescFields[2], TypeVarChar, MAX_SIZE_OF_NAME_IN_DB});
+
+	//for fast lookup -> insert <table id, list of column info> for TABLE INTO _catalogColumn
+	_catalogColumn.insert(std::pair<int, std::vector<ColumnInfo> >(CATALOG_TABLE_ID, tableInfo));
+
+	//6. insert record about table Columns into Columns =>
+	//		{TABLE_ID=CATALOG_COLUMN_ID, COLUMN_NAME=columnDescFields[#], COLUMN_TYPE=column[#].type, COLUMN_LENGTH=column[#].length}
 	//Columns table with the following attributes (table-id, column-name, column-type, column-length)
 	std::vector<Attribute> column;
 	const char* columnDescFields[] = { "table-id", "column-name", "column-type",
 			"column-length" };
-	table.push_back(
+	column.push_back(
 			(Attribute) {columnDescFields[0], AttrType(0), sizeof(unsigned int)});
-	table.push_back(
+	column.push_back(
 			(Attribute) {columnDescFields[1], AttrType(2), MAX_SIZE_OF_NAME_IN_DB});
-	table.push_back(
+	column.push_back(
 			(Attribute) {columnDescFields[2], AttrType(0), sizeof(unsigned int)});
-	table.push_back(
+	column.push_back(
 			(Attribute) {columnDescFields[3], AttrType(0), sizeof(unsigned int)});
 
-	//compose and insert COLUMN records for COLUMN table
-	createRecordInColumns(columnHandle, table, 0, CATALOG_TABLE_ID,
-			tableDescFields[0]);
-	createRecordInColumns(columnHandle, table, 1, CATALOG_TABLE_ID,
-			tableDescFields[1]);
-	createRecordInColumns(columnHandle, table, 2, CATALOG_TABLE_ID,
-			tableDescFields[2]);
+	//compose and insert COLUMN records for COLUMNS table
+	if( createRecordInColumns(columnHandle, column, 0, CATALOG_COLUMN_ID, columnDescFields[0]) != 0 ||
+		createRecordInColumns(columnHandle, column, 1, CATALOG_COLUMN_ID, columnDescFields[1]) != 0 ||
+		createRecordInColumns(columnHandle, column, 2, CATALOG_COLUMN_ID, columnDescFields[2]) != 0 ||
+		createRecordInColumns(columnHandle, column, 3, CATALOG_COLUMN_ID, columnDescFields[3]) != 0 )
+	{
+		//abort
+		cleanup();
+		exit(-1);
+	}
 
-	//compose list of column information
-	std::vector<ColumnInfo> tableInfo;
-	tableInfo.push_back(
-			(ColumnInfo) {tableDescFields[0], AttrType(0), sizeof(unsigned int)});
-	tableInfo.push_back(
-			(ColumnInfo) {tableDescFields[1], AttrType(2), MAX_SIZE_OF_NAME_IN_DB});
-	tableInfo.push_back(
-			(ColumnInfo) {tableDescFields[2], AttrType(2), MAX_SIZE_OF_NAME_IN_DB});
-
-	//for fast lookup -> insert <table id, list of column info, RID> for TABLE INTO _catalogColumn
-	_catalogColumn.insert(
-			std::pair<int, std::vector<ColumnInfo> >(CATALOG_TABLE_ID,
-					tableInfo));
-
-	//compose and insert COLUMN records for COLUMN table
-	createRecordInColumns(columnHandle, column, 0, CATALOG_COLUMN_ID,
-			columnDescFields[0]);
-	createRecordInColumns(columnHandle, column, 1, CATALOG_COLUMN_ID,
-			columnDescFields[1]);
-	createRecordInColumns(columnHandle, column, 2, CATALOG_COLUMN_ID,
-			columnDescFields[2]);
-	createRecordInColumns(columnHandle, column, 3, CATALOG_COLUMN_ID,
-			columnDescFields[3]);
-
+	//7. insert information about Columns into Column's map
 	//compose list of column information
 	std::vector<ColumnInfo> columnInfo;
 	columnInfo.push_back(
@@ -232,9 +252,184 @@ void RelationManager::createCatalog() //NOT TESTED
 	_catalogColumn.insert(
 			std::pair<int, std::vector<ColumnInfo> >(CATALOG_COLUMN_ID,
 					columnInfo));
+
+	//close both catalog files
+	if( _rbfm->closeFile(tableHandle) != 0 || _rbfm->closeFile(columnHandle) != 0 )
+	{
+		//abort
+		cleanup();
+		exit(-1);
+	}
 }
 
-RelationManager::RelationManager() //NOT TESTED
+void RelationManager::insertElementsFromTableIntoMap(std::string tableName, std::vector<Attribute> tableDesc)
+{
+	//quick way of determining whether the given system table a table of Columns or Tables
+	bool isColumnsTable = (tableName == CATALOG_COLUMN_NAME);
+
+	//make sure that the given table name refers to one of the system tables
+	if( tableName != CATALOG_TABLE_NAME && !isColumnsTable )
+	{
+		//destroy system files
+		cleanup();
+
+		//fail
+		exit(-1);
+	}
+
+	//setup iterator to loop thru table Tables to insert each found record into the local copy
+	RM_ScanIterator iterator;
+
+	//allocate buffer for storing iterated elements, i.e. table and column records
+	void* data = malloc(PAGE_SIZE);
+	memset(data, 0, PAGE_SIZE);
+
+	//setup list of attributes for scanning
+	std::vector<string> tableAttr;
+
+	//loop through elements of attributes to create list of strings
+	std::vector<Attribute>::iterator i = tableDesc.begin();
+
+	//setup tableAttr
+	for( ; i != tableDesc.end(); i++ )
+	{
+		tableAttr.push_back( i->name );
+	}
+
+	//set the iterator to the beginning of the given table
+	if( scan(tableName, "", NO_OP, NULL, tableAttr, iterator) != 0 )
+	{
+		//delete system files
+		cleanup();
+
+		//abort
+		exit(-1);
+	}
+
+	//record identifier for table records
+	RID rid;
+
+	//loop through Table's records and insert them into _catalogTable
+	while( iterator.getNextTuple(rid, data) != RM_EOF )
+	{
+		//insert iterated element into the proper map
+		if( isColumnsTable )
+			processColumnRecordAndInsertIntoMap((char*) data);
+		else
+			processTableRecordAndInsertIntoMap((char*) data, rid);
+	}
+
+}
+
+void RelationManager::processTableRecordAndInsertIntoMap(char* data, const RID& rid)
+{
+	//get integer that represents table-id
+	unsigned int table_id = *((unsigned int*)data);
+
+	//update data pointer
+	data += sizeof(unsigned int);
+
+	//get table-name
+		//get integer that describes the size of the char-array
+		unsigned int sz_of_name = *((unsigned int*)data);
+
+		//update data pointer
+		data += sizeof(unsigned int);
+
+		//get string for table name
+
+			//get character array
+			char* carr_table_name = (char*) malloc(sz_of_name + 1);
+			memset(carr_table_name, 0, sz_of_name + 1);
+			memcpy(carr_table_name, data, sz_of_name);
+
+			//convert to string
+			string str_table_name = string(carr_table_name);
+
+			//free space used by the table name
+			free(carr_table_name);
+		//update data pointer
+		data += sz_of_name;
+
+	//get file-name
+		//get integer that describes the size of the char-array
+		sz_of_name = *((unsigned int*)data);
+
+		//update data pointer
+		data += sizeof(unsigned int);
+
+		//get string for table name
+
+			//get character array
+			char* carr_file_name = (char*) malloc(sz_of_name + 1);
+			memset(carr_file_name, 0, sz_of_name + 1);
+			memcpy(carr_file_name, data, sz_of_name);
+
+			//convert to string
+			string str_file_name = string(carr_file_name);
+
+			//free space used by the table name
+			free(carr_file_name);
+
+	//insert record elements inside _catalogTable
+	_catalogTable.insert(std::pair<string, TableInfo>( str_table_name, (TableInfo){ table_id, str_table_name, rid } ));
+}
+
+void RelationManager::processColumnRecordAndInsertIntoMap(char* data)
+{
+	//(table-id, column-name, column-type, column-length)
+
+	//get integer that represents table-id
+	unsigned int table_id = *((unsigned int*)data);
+
+	//update data pointer
+	data += sizeof(unsigned int);
+
+	//get column-name
+		//get integer that describes the size of the char-array
+		unsigned int sz_of_name = *((unsigned int*)data);
+
+		//update data pointer
+		data += sizeof(unsigned int);
+
+		//get string for column name
+
+			//get character array
+			char* carr_column_name = (char*) malloc(sz_of_name + 1);
+			memset(carr_column_name, 0, sz_of_name + 1);
+			memcpy(carr_column_name, data, sz_of_name);
+
+			//convert to string
+			string str_column_name = string(carr_column_name);
+
+			//free space used by the table name
+			free(carr_column_name);
+		//update data pointer
+		data += sz_of_name;
+
+	//get integer that represents column-type
+	unsigned int column_type = *((unsigned int*)data);
+
+	//update data pointer
+	data += sizeof(unsigned int);
+
+	//get integer that represents column-length
+	unsigned int column_length = *((unsigned int*)data);
+
+	//iterator that points at the key-value pair of interest
+	std::map< int, std::vector< ColumnInfo > >::iterator iterator = _catalogColumn.find(table_id);
+
+	//make sure that the pair with the given table-id exists inside the map
+	if( iterator == _catalogColumn.end() )
+	{
+		iterator = _catalogColumn.insert( std::pair<int, std::vector<ColumnInfo> >() ).first;
+	}
+
+	//insert record elements inside _catalogTable
+	(*iterator).second.push_back( (ColumnInfo) { str_column_name, (AttrType)column_type, column_length } );
+}
+
+RelationManager::RelationManager()	//NOT TESTED
 {
 	_rbfm = RecordBasedFileManager::instance();
 
@@ -244,34 +439,180 @@ RelationManager::RelationManager() //NOT TESTED
 	std::string catalogTableFileName = string(CATALOG_TABLE_NAME),
 			catalogColumnFileName = string(CATALOG_COLUMN_NAME);
 
-	if (_rbfm->openFile(catalogTableFileName, catalogOfTables) != 0
-			|| _rbfm->openFile(catalogColumnFileName, catalogOfColumns) != 0) {
+
+	if( _rbfm->openFile(catalogTableFileName, catalogOfTables) != 0
+			|| _rbfm->openFile(catalogColumnFileName, catalogOfColumns) != 0 ) {
 		//if some of the system files do not exist, clean up
 		cleanup();
 
 		//and compile new catalog files
 		createCatalog();
-	} else {
-		//TODO: check that content of the catalog is consistent
+	} else	//the DB was in existence beforehand
+	{
+
+
+		//TODO:
+		//loop thru table Tables (that stores records for each table in the DB) and insert them into _catalogTable
+		//	check whether system tables are in presence (i.e. Tables and Columns), if not abort
+		//loop thru table Columns (that inserts types of columns in the DB) and insert them into _catalogColumn
+
+		//insert elements from the table Tables into _catalogTable
+			//create list of attributes for table Tables
+			std::vector<Attribute> table;
+			const char* tableDescFields[] = {"table-id", "table-name", "file-name"};
+
+			table.push_back(
+					(Attribute) {tableDescFields[0], AttrType(0), sizeof(unsigned int)});
+			table.push_back(
+					(Attribute) {tableDescFields[1], AttrType(2), MAX_SIZE_OF_NAME_IN_DB});
+			table.push_back(
+					(Attribute) {tableDescFields[2], AttrType(2), MAX_SIZE_OF_NAME_IN_DB});
+
+		insertElementsFromTableIntoMap(CATALOG_TABLE_NAME, table);
+
+		//insert elements from the table Columns into _catalogColumn
+			//create list of attributes for table Columns
+			std::vector<Attribute> column;
+			const char* columnDescFields[] = { "table-id", "column-name", "column-type",
+					"column-length" };
+			column.push_back(
+					(Attribute) {columnDescFields[0], AttrType(0), sizeof(unsigned int)});
+			column.push_back(
+					(Attribute) {columnDescFields[1], AttrType(2), MAX_SIZE_OF_NAME_IN_DB});
+			column.push_back(
+					(Attribute) {columnDescFields[2], AttrType(0), sizeof(unsigned int)});
+			column.push_back(
+					(Attribute) {columnDescFields[3], AttrType(0), sizeof(unsigned int)});
+
+		insertElementsFromTableIntoMap(CATALOG_COLUMN_NAME, column);
 	}
+
+	//setup the other class data-member(s)
+	_nextTableId = (CATALOG_COLUMN_ID > CATALOG_TABLE_ID ? CATALOG_COLUMN_ID : CATALOG_TABLE_ID) + 1;
 }
 
-RelationManager::~RelationManager() {
+RelationManager::~RelationManager()
+{
 	//not sure
 }
 
-RC RelationManager::createTable(const string &tableName,
-		const vector<Attribute> &attrs) {
-	//TODO
-	//checking the input arguments: empty tableName, zero-size attr vector => fail(-29:wrong table arguments)
-	//make sure that table does not exists, if it does => fail(-30:attempt to re-create a table)
-	//create file for the table (From project 2 description: "A table maps to a single file, and a single file contains only one table.")
-	//assign table's id
-	//	* in case there were deleted tables, then need to use their IDs for the next created table (may need to store vector of free table IDs)
-	//	* in case there were NO deleted tables, may need to store _nextTableId inside rm.h, for fast unique id assignment
-	//insert record (tuple) into catalog Table's table AND _catalogTable (see rm.h)
-	//add attributes (i.e. columns to catalog Table of columns) AND _catatlogColumn (see rm.h)
-	return -1;
+//error codes for project 2, component RM:
+//	-29 = wrong table arguments
+//	-30 = attempt to re-create existing table
+//	-31 = accessing/modifying/deleting table that does not exists
+//	-32 = Table of tables corrupted
+//	-33 = local map catalog is corrupted
+
+bool RelationManager::isTableExisiting(std::string tableName)
+{
+	return _catalogTable.find(tableName) != _catalogTable.end();
+}
+
+RC RelationManager::createTable(const string &tableName, const vector<Attribute> &attrs)
+{
+	RC errCode = 0;
+
+	//checking the input arguments
+	if( tableName.length() == 0 || attrs.size() == 0 )
+	{
+		return -29;	//wrong table arguments
+	}
+
+	//make sure that the table does not exist, otherwise fail
+	if( isTableExisiting(tableName) )
+	{
+		return -30;	//attempt to re-create existing table
+	}
+
+	//create file for the table
+	if( (errCode = _rbfm->createFile(tableName)) != 0 )
+	{
+		//return error code
+		return errCode;
+	}
+
+	//open catalog table's TABLE
+	FileHandle tableHandle;
+
+	if( (errCode = _rbfm->openFile(CATALOG_TABLE_NAME, tableHandle)) != 0 )
+	{
+		//return error code
+		return errCode;
+	}
+
+	unsigned int id = 0;
+
+	//if there are unoccupied table IDs, then
+	if( _freeTableIds.size() > 0 )
+	{
+		//assign one from the top of the stack
+		id = _freeTableIds.top();
+
+		//remove it from the stack
+		_freeTableIds.pop();
+	}
+
+	//if there were no unoccupied table IDs, then
+	if( id == 0 )
+	{
+		//assign using the next counter
+		id = _nextTableId++;
+	}
+
+	//insert record (tuple) into catalog Table's table
+
+	//maintain record identifier for the element inserted into table Tables
+	RID tableRid;
+
+	//insert new record into table Tables
+	if( (errCode = createRecordInTables(tableHandle, attrs, tableName.c_str(), id, tableRid)) != 0 )
+	{
+		//return error code
+		return errCode;
+	}
+
+	//insert an entry into _catalogTable
+	_catalogTable.insert(std::pair<string, TableInfo>(tableName, (TableInfo){id, tableName, tableRid} ));
+
+	//close table handle
+	if( (errCode = _rbfm->closeFile(tableHandle)) != 0 )
+	{
+		//return error code
+		return errCode;
+	}
+
+	//open catalog table Columns
+	FileHandle columnHandle;
+
+	if( (errCode = _rbfm->openFile(CATALOG_COLUMN_NAME, columnHandle)) != 0 )
+	{
+		//return error code
+		return errCode;
+	}
+
+	std::vector<ColumnInfo> tableInfo;
+	std::vector<Attribute>::const_iterator i = attrs.begin(), max = attrs.end();
+	for( ; i != max; i++ )
+	{
+		//create column information entry
+		tableInfo.push_back( (ColumnInfo){ (*i).name, (*i).type, (*i).length } );
+
+		//create record in table Columns
+		if( (errCode = createRecordInColumns( columnHandle, attrs, 0, id, (*i).name.c_str() )) != 0 )
+		{
+			//close the column handle
+			_rbfm->closeFile(columnHandle);
+
+			//fail
+			return errCode;
+		}
+	}
+
+	//for fast lookup -> insert <table id, list of column info> for TABLE INTO _catalogColumn
+	_catalogColumn.insert(std::pair<int, std::vector<ColumnInfo> >(id, tableInfo));
+
+	//success
+	return 0;
 }
 
 RC RelationManager::deleteTable(const string &tableName) {
@@ -291,7 +632,7 @@ RC RelationManager::deleteTable(const string &tableName) {
 
 RC RelationManager::getAttributes(const string &tableName,
 		vector<Attribute> &attrs) //NOT TESTED
-		{
+{
 	//TODO
 	//checking that the input arguments make sense - empty string => fail
 	//check if table exists, if not => fail(-31:accessing/modifying/deleting table that does not exists)
@@ -309,7 +650,7 @@ RC RelationManager::getAttributes(const string &tableName,
 	}
 
 	//get the tableId
-	int tableId = _catalogTable[tableName];
+	int tableId = _catalogTable[tableName]._id;
 
 	//get the handle for columns file
 	FileHandle fileHandle;

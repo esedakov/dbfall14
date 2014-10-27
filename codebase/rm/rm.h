@@ -4,7 +4,7 @@
 
 #include <string>
 #include <vector>
-
+#include <stack>
 #include <map>
 
 #include "../rbf/rbfm.h"
@@ -38,6 +38,7 @@ private:
 };
 
 struct ColumnInfo;
+struct TableInfo;
 
 // Relation Manager
 class RelationManager
@@ -77,14 +78,26 @@ public:
   //delete catalog
   void cleanup();
 
+  //insert elements from the system catalog table into local maps (e.g. _catalogTable and _columnTable) , which store useful information about these tables
+  void insertElementsFromTableIntoMap(std::string tableName, std::vector<Attribute> tableDesc);
+
+  //insert element, iterated by <insertElementsFromTableIntoMap>, into _catalogTable
+  void processTableRecordAndInsertIntoMap(char* data, const RID& rid);
+
+  //insert element, iterated by <insertElementsFromTableIntoMap>, into _catalogColumn
+  void processColumnRecordAndInsertIntoMap(char* data);
+
   //create catalog tables
   void createCatalog();
 
   //create a record inside table of Tables
-  RC createRecordInTables(FileHandle tableHandle, std::vector<Attribute> table, const char* tableFields, int tableId);
+  RC createRecordInTables(FileHandle tableHandle, std::vector<Attribute> table, const char* tableFields, int tableId, RID& rid);
 
   //create record inside table of Columns
   RC createRecordInColumns(FileHandle columnHandle, std::vector<Attribute> column, int index, unsigned int tableId, const char * columnName);
+
+  //check whether table with the given name exists
+  bool isTableExisiting(std::string tableName);
 
 // Extra credit
 public:
@@ -106,19 +119,37 @@ private:
   RecordBasedFileManager* _rbfm;
 
   //hash map for quick lookup of table inside the catalog's Table of tables
-  std::map<string, int> _catalogTable;	//<table name, tableId>	(subject to further modification)
+  std::map<string, TableInfo> _catalogTable;	//<table name, tableId>	(subject to further modification)
 
   //hash map for quick lookup of column inside the catalog's Table of columns
-  std::map< int, std::vector< ColumnInfo > > _catalogColumn;	//<table id, ColumnInfo >
+  std::map< int, std::vector< ColumnInfo > > _catalogColumn;	//<table id, <list of column info> >
+
+  //list of table IDs that are now unoccupied, and were used by the deleted tables
+  std::stack<unsigned int> _freeTableIds;
+
+  //counter for keeping track of the largest table id assigned
+  unsigned int _nextTableId;
 };
 
 
 //after this line, our constants, structures, and data types were added
 
+struct TableInfo
+{
+	//table id
+	unsigned int _id;
+
+	//table name
+	std::string _name;
+
+	//rid
+	RID _rid;
+};
+
 struct ColumnInfo
 {
 	//column name
-	string _name;
+	std::string _name;
 
 	//unique identifier for column
 	//unsigned int _columnId;
@@ -126,8 +157,6 @@ struct ColumnInfo
 	AttrType _type;	//create a enum and within it a unique identifier for each type
 
 	unsigned int _length;
-
-	RID _rid;
 };
 
 //constants used to identify file names for two system tables - table and column
