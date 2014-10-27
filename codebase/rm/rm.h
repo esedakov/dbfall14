@@ -79,25 +79,25 @@ public:
   void cleanup();
 
   //insert elements from the system catalog table into local maps (e.g. _catalogTable and _columnTable) , which store useful information about these tables
-  void insertElementsFromTableIntoMap(std::string tableName, std::vector<Attribute> tableDesc);
+  void insertElementsFromTableIntoMap(const std::string& tableName, const std::vector<Attribute>& tableDesc);
 
   //insert element, iterated by <insertElementsFromTableIntoMap>, into _catalogTable
-  void processTableRecordAndInsertIntoMap(char* data, const RID& rid);
+  void processTableRecordAndInsertIntoMap(const void* data, const RID& rid);
 
   //insert element, iterated by <insertElementsFromTableIntoMap>, into _catalogColumn
-  void processColumnRecordAndInsertIntoMap(char* data);
+  void processColumnRecordAndInsertIntoMap(const void* data);
 
   //create catalog tables
   void createCatalog();
 
   //create a record inside table of Tables
-  RC createRecordInTables(FileHandle tableHandle, std::vector<Attribute> table, const char* tableFields, int tableId, RID& rid);
+  RC createRecordInTables(FileHandle& tableHandle, const std::vector<Attribute>& table, const char* tableName, int tableId, RID& rid);
 
   //create record inside table of Columns
-  RC createRecordInColumns(FileHandle columnHandle, std::vector<Attribute> column, int index, unsigned int tableId, const char * columnName);
+  RC createRecordInColumns(FileHandle& columnHandle, const std::vector<Attribute>& column, int index, unsigned int tableId, const char * columnName, RID& rid);
 
   //check whether table with the given name exists
-  bool isTableExisiting(std::string tableName);
+  bool isTableExisiting(const std::string& tableName);
 
 // Extra credit
 public:
@@ -157,6 +157,8 @@ struct ColumnInfo
 	AttrType _type;	//create a enum and within it a unique identifier for each type
 
 	unsigned int _length;
+
+	RID _rid;
 };
 
 //constants used to identify file names for two system tables - table and column
