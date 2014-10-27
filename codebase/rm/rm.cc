@@ -507,7 +507,6 @@ RelationManager::~RelationManager()
 //	-30 = attempt to re-create existing table
 //	-31 = accessing/modifying/deleting table that does not exists
 //	-32 = Table of tables corrupted
-//	-33 = local map catalog is corrupted
 
 bool RelationManager::isTableExisiting(const std::string& tableName)
 {
@@ -624,18 +623,74 @@ RC RelationManager::createTable(const string &tableName, const vector<Attribute>
 }
 
 RC RelationManager::deleteTable(const string &tableName) {
-	//TODO
-	//checking that input argument makes sense -- empty string => fail(-29:wrong table arguments)
-	//check if table exists, if it does not => fail(-31:accessing/modifying/deleting table that does not exists)
-	//find a record inside the Table of tables for this table
-	//	* no record found => fail(-32:Table of tables corrupted)
+	RC errCode = 0;
+
+	//checking that input argument makes sense
+	if( tableName.size() == 0 )
+	{
+		//fail
+		return -29;	//wrong table arguments
+	}
+
+	//check if table exists
+	std::map<string, TableInfo>::iterator tableIter = _catalogTable.find(tableName);
+	if( iterator == _catalogTable.end() )
+	{
+		//fail
+		return -31;	//accessing table that does not exists
+	}
+
+	//fast access for table information
+	TableInfo info = (*tableIter).second;
+
+	//1, remove record inside Tables
+	//find and remove record inside the table Tables for this table
+	if( (errCode = deleteTuple(CATALOG_TABLE_NAME, info._rid)) != 0 )
+	{
+		//fail
+		return errCode;	//most likely record does not exist
+	}
+
+	//2. remove file representing the table
 	//remove file corresponding to this table (using the information from the record from Table of tables, i.e. 3rd field = file-name)
-	//remove record (tuple) from both _catatlogTable AND catalog Table's table
-	//	* no record inside the _catalogTable => fail(-33:local map catalog is corrupted)
-	//remove records (tuples) corresponding to descriptions of columns for this table
-	//	* no record inside the table of columns or _catalogColumn => fail(-33:local map catalog is corrupted)
-	//if we use the vector of free IDs (for fast assignment of id to newly created table), then insert id into that vector
-	return -1;
+	if( (errCode = _rbfm->destroyFile(info._name)) != 0 )
+	{
+		//fail
+		return errCode;	//file does not exist
+	}
+
+	//get list of column information
+	std::map<int, std::vector<ColumnInfo> >::iterator columnIter = _catalogColumn.find((int)info._id);
+
+	if( columnIter == _catalogColumn.end() )
+	{
+		//fail
+		return -31;	//accessing column table that does not exist
+	}
+
+	std::vector<ColumnInfo> vecColInfo = (*columnIter).second;
+
+	//3. remove records from Columns
+	//find and remove records inside the table Columns, representing separate fields of this table
+	std::vector<ColumnInfo>::iterator colInfoIter = vecColInfo.begin(), max = vecColInfo.end();
+	for( ; colInfoIter != max; colInfoIter++ )
+	{
+		if( (errCode = deleteTuple(CATALOG_COLUMN_NAME, (*colInfoIter)._rid)) != 0)
+		{
+			//fail
+			return errCode;	//most likely record does not exist
+		}
+	}
+
+	//include unoccupied rid into the free list
+	_freeTableIds.push(info._id);
+
+	//4. remove entries from both maps corresponding to tables Tables and Columns
+	_catalogTable.erase(tableIter);
+	_catalogColumn.erase(columnIter);
+
+	//success
+	return errCode;
 }
 
 RC RelationManager::getAttributes(const string &tableName,
