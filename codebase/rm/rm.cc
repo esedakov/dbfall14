@@ -920,7 +920,11 @@ RC RelationManager::insertTuple(const string &tableName, const void *data,
 
 	vector<Attribute> attrs;
 	//get the attributes for this table
-	getAttributes(tableName, attrs);
+	if( (errCode = getAttributes(tableName, attrs)) != 0 )
+	{
+		//fail
+		return errCode;
+	}
 
 	//create the handle and open the table
 	FileHandle fileHandle;
@@ -973,9 +977,6 @@ RC RelationManager::deleteTuples(const string &tableName) {
 }
 
 RC RelationManager::deleteTuple(const string &tableName, const RID &rid) {
-	//TODO
-	//checking (table name, rid != <0,0> AND rid.slot != (unsigned)-1)
-	//simply delete record with use of RBFM (record description from getAttributes)
 
 	RC errCode = 0;
 	//check if there is inconsistent data
@@ -984,7 +985,11 @@ RC RelationManager::deleteTuple(const string &tableName, const RID &rid) {
 
 	vector<Attribute> attrs;
 	//get the attributes for this table
-	getAttributes(tableName, attrs);
+	if( (errCode = getAttributes(tableName, attrs)) != 0 )
+	{
+		//fail
+		return errCode;
+	}
 
 	//create the handle and open the table
 	FileHandle fileHandle;
@@ -1009,7 +1014,11 @@ RC RelationManager::updateTuple(const string &tableName, const void *data,
 
 	vector<Attribute> attrs;
 	//get the attributes for this table
-	getAttributes(tableName, attrs);
+	if( (errCode = getAttributes(tableName, attrs)) != 0 )
+	{
+		//fail
+		return errCode;
+	}
 
 	//create the handle and open the table
 	FileHandle fileHandle;
@@ -1034,7 +1043,11 @@ RC RelationManager::readTuple(const string &tableName, const RID &rid,
 
 	vector<Attribute> attrs;
 	//get the attributes for this table
-	getAttributes(tableName, attrs);
+	if( (errCode = getAttributes(tableName, attrs)) != 0 )
+	{
+		//fail
+		return errCode;
+	}
 
 	//create the handle and open the table
 	FileHandle fileHandle;
@@ -1062,7 +1075,11 @@ RC RelationManager::readAttribute(const string &tableName, const RID &rid,
 
 	vector<Attribute> attrs;
 	//get the attributes for this table
-	getAttributes(tableName, attrs);
+	if( (errCode = getAttributes(tableName, attrs)) != 0 )
+	{
+		//fail
+		return errCode;
+	}
 
 	//create the handle and open the table
 	FileHandle fileHandle;
@@ -1091,7 +1108,11 @@ RC RelationManager::reorganizePage(const string &tableName,
 
 	vector<Attribute> attrs;
 	//get the attributes for this table
-	getAttributes(tableName, attrs);
+	if( (errCode = getAttributes(tableName, attrs)) != 0 )
+	{
+		//fail
+		return errCode;
+	}
 
 	//create the handle and open the table
 	FileHandle fileHandle;
@@ -1100,10 +1121,19 @@ RC RelationManager::reorganizePage(const string &tableName,
 
 	//reorganize Page
 	if ((errCode = _rbfm->reorganizePage(fileHandle, attrs, pageNumber)) != 0)
+	{
+		//fail
+		_rbfm->closeFile(fileHandle);
 		return errCode;
+	}
 
-	_rbfm->closeFile(fileHandle);
+	if( (errCode = _rbfm->closeFile(fileHandle)) != 0 )
+	{
+		//fail
+		return errCode;
+	}
 
+	//success
 	return errCode;
 }
 

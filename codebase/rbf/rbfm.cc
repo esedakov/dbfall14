@@ -1557,6 +1557,17 @@ RC	RBFM_ScanIterator::getNextRecord(RID &rid, void* data)
 				//went thru entire file, i.e. cannot find the next record
 				return RBFM_EOF;
 			}
+
+			//if the given slot points to the deleted record (i.e. we are stepping thru the file record-by-record, so
+			//if some of them are deleted, it is possible to encounter this "error"
+			if( errCode == -24 )
+			{
+				//go to the next slot
+				_slotnum++;
+
+				//loop again
+				continue;
+			}
 		}
 
 		//check whether this record satisfies given condition
@@ -1679,8 +1690,8 @@ RC	RBFM_ScanIterator::getNextRecord(RID &rid, void* data)
 							memcpy(data, curRecord, attrSz);
 							break;
 						}
-						data += attrSz;
-						curRecord += attrSz;
+						data = (void*)((char*)data + attrSz);
+						curRecord = (void*)((char*)curRecord + attrSz);
 					}
 
 					//deallocate space for record
