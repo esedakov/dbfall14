@@ -4,6 +4,12 @@
 #include <string.h>
 #include <iostream>
 
+//error codes for project 2, component RM:
+//	-29 = wrong table arguments
+//	-30 = attempt to re-create existing table
+//	-31 = accessing/modifying/deleting table that does not exists
+//	-32 = Table of tables corrupted
+
 RelationManager* RelationManager::_rm = 0;
 
 RelationManager* RelationManager::instance()
@@ -633,12 +639,6 @@ RelationManager::~RelationManager()
 	//not sure
 }
 
-//error codes for project 2, component RM:
-//	-29 = wrong table arguments
-//	-30 = attempt to re-create existing table
-//	-31 = accessing/modifying/deleting table that does not exists
-//	-32 = Table of tables corrupted
-
 bool RelationManager::isTableExisiting(const std::string& tableName)
 {
 	return _catalogTable.find(tableName) != _catalogTable.end();
@@ -858,16 +858,9 @@ RC RelationManager::deleteTable(const string &tableName) {
 RC RelationManager::getAttributes(const string &tableName,
 		vector<Attribute> &attrs) //NOT TESTED
 {
-	//TODO
-	//checking that the input arguments make sense - empty string => fail
-	//check if table exists, if not => fail(-31:accessing/modifying/deleting table that does not exists)
-	//from _catatlogColumn get a vector of ColumnInfo describing the list of columns and their corresponding types
-	//	* if there is no record => fail(-33:local map catalog is corrupted)
-	//loop thru the list of columns and insert fields into attrs
-
 	RC errCode = 0;
 	if (tableName.empty())
-		return -1; //tableName no valid
+		return -29; //tableName no valid
 
 	//check if the table exist in the map
 	if (_catalogTable.find(tableName) == _catalogTable.end()) {
@@ -918,20 +911,12 @@ RC RelationManager::getAttributes(const string &tableName,
 
 RC RelationManager::insertTuple(const string &tableName, const void *data,
 		RID &rid) {
-	//TODO
-	//checking that the input arguments make sense - empty table name, or NULL-ed data, or rid with inconsistent data:
-	//	=> page number eq 0 => fail (the first page is always reserved for first header page)
-	//		=> if also slot number is 0, then the rid points to a deleted record (by the rules of RBFM)
-	//	=> slot number eq (unsigned int)-1 => may be fail? => means a TombStone record
-	//get description of record (call getAttributes OR simply lookup into _catalogColumns)
-	//insert record with use of RBFM class
 
 	RC errCode = 0;
 
 	//check if there is inconsistent data
-	if (tableName.empty() || data == NULL || rid.pageNum == 0
-			|| rid.slotNum == 0)
-		return -1;
+	if (tableName.empty() || data == NULL || rid.pageNum == 0)
+		return -29;
 
 	vector<Attribute> attrs;
 	//get the attributes for this table
@@ -953,10 +938,38 @@ RC RelationManager::insertTuple(const string &tableName, const void *data,
 }
 
 RC RelationManager::deleteTuples(const string &tableName) {
-	//TODO
+	RC errCode = 0;
+
 	//checking that table name is not empty string
-	//simply delete all records with use of RBFM
-	return -1;
+	if( tableName.empty() )
+		return -29;
+
+	FileHandle tableHandle;
+
+	//open file that contains table tuples
+	if( (errCode = _rbfm->openFile(tableName, tableHandle)) != 0 )
+	{
+		//fail
+		return errCode;
+	}
+
+	//delete records from the opened file
+	if( (errCode = _rbfm->deleteRecords(tableHandle)) != 0 )
+	{
+		//fail
+		_rbfm->closeFile(tableHandle);
+		return errCode;
+	}
+
+	//close file
+	if( (errCode = _rbfm->closeFile(tableHandle)) != 0 )
+	{
+		//fail
+		return errCode;
+	}
+
+	//success
+	return errCode;
 }
 
 RC RelationManager::deleteTuple(const string &tableName, const RID &rid) {
@@ -967,7 +980,7 @@ RC RelationManager::deleteTuple(const string &tableName, const RID &rid) {
 	RC errCode = 0;
 	//check if there is inconsistent data
 	if (tableName.empty() || rid.pageNum == 0)
-		return -1;
+		return -29;
 
 	vector<Attribute> attrs;
 	//get the attributes for this table
@@ -992,7 +1005,7 @@ RC RelationManager::updateTuple(const string &tableName, const void *data,
 	RC errCode = 0;
 	//check if there is inconsistent data
 	if (tableName.empty() || data == NULL || rid.pageNum == 0)
-		return -1;
+		return -29;
 
 	vector<Attribute> attrs;
 	//get the attributes for this table
@@ -1017,7 +1030,7 @@ RC RelationManager::readTuple(const string &tableName, const RID &rid,
 	RC errCode = 0;
 	//check if there is inconsistent data
 	if (tableName.empty() || data == NULL || rid.pageNum == 0)
-		return -1;
+		return -29;
 
 	vector<Attribute> attrs;
 	//get the attributes for this table
@@ -1044,9 +1057,8 @@ RC RelationManager::readAttribute(const string &tableName, const RID &rid,
 	//simple read attribute with use of RBFM (record description from getAttributes)
 	RC errCode = 0;
 	//check if there is inconsistent data
-	if (tableName.empty() || data == NULL || rid.pageNum == 0
-			|| rid.slotNum == 0)
-		return -1;
+	if (tableName.empty() || data == NULL || rid.pageNum == 0)
+		return -29;
 
 	vector<Attribute> attrs;
 	//get the attributes for this table
@@ -1075,7 +1087,7 @@ RC RelationManager::reorganizePage(const string &tableName,
 	RC errCode = 0;
 	//check if there is inconsistent data
 	if (tableName.empty())
-		return -1;
+		return -29;
 
 	vector<Attribute> attrs;
 	//get the attributes for this table
@@ -1134,7 +1146,7 @@ RC RelationManager::scan(const string &tableName,
 	RC errCode = 0;
 	//check if there is inconsistent data
 	if (tableName.empty())
-		return -1;
+		return -29;
 
 	//create the handle and open the table
 	FileHandle fileHandle;
