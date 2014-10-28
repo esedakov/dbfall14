@@ -161,9 +161,14 @@ RC PagedFileManager::openFile(const char *fileName, FileHandle &fileHandle)
 		//mark this file handle to be in need to setup a file info
 		setup_file_info = true;
 
+		std::pair<std::map<std::string, FileInfo>::iterator, bool> resultOfInsertion = _files.insert( std::pair<std::string, FileInfo>(fileName, info) );
+
 		//insert record into hash-map (_files)
-		if( _files.insert( std::pair<std::string, FileInfo>(fileName, info) ).second == false )
+		if( resultOfInsertion.second == false )
 			return -3;	//entry with this FILE* already exists
+
+		//set the iter
+		iter = resultOfInsertion.first;
 		//return -7; //error removed, since it appears to be possible to open a file that was not created by original DB
 	}
 
@@ -195,6 +200,9 @@ RC PagedFileManager::openFile(const char *fileName, FileHandle &fileHandle)
 		void* data = malloc(PAGE_SIZE);
 
 		int errCode = 0;
+
+		//allow access to the header page
+		fileHandle._info->_numPages = 1;
 
 		//explicitly read the number of pages from the file's first header
 		if( (errCode = fileHandle.readPage(0, data)) != 0 )
@@ -257,7 +265,7 @@ RC FileHandle::readPage(PageNum pageNum, void *data)
 	//check that pageNum is within the boundaries of a given file
     if( pageNum >= getNumberOfPages() )
     {
-    	//return -10;
+    	return -10;
     }
 
     //check that data is not corrupted (i.e. data ptr is not null)

@@ -78,6 +78,7 @@ public:
 	unsigned int	_slotnum;
 	FileHandle _fileHandle;
 	vector<Attribute> _recordDescriptor;
+	vector<string> _attributes;
 	string _conditionAttribute;
 	CompOp _compO;					// comparision type such as "<" and "="
 	const void* _value;					// used in the comparison

@@ -91,6 +91,9 @@ RC RecordBasedFileManager::createFile(const string &fileName) {
 	//insert page header into the file
 	fileHandle.appendPage(&header);
 
+	//write back that this file has number of pages = 1
+	fileHandle.writeBackNumOfPages();
+
 	//close file
 	errCode = _pfm->closeFile(fileHandle);
 	if(errCode != 0)
@@ -496,7 +499,7 @@ RC RecordBasedFileManager::readRecord(FileHandle &fileHandle, const vector<Attri
 
     if( rid.pageNum == 0 || rid.pageNum >= fileHandle.getNumberOfPages() )
     {
-    	//return -28; //rid is not setup correctly
+    	return -28; //rid is not setup correctly
     }
 
     //allocate array for storing contents of the data page
@@ -1297,7 +1300,10 @@ RC RecordBasedFileManager::findHeaderPage(FileHandle fileHandle, PageNum pageId,
 		//cast data to Header
 		hPage = (Header*)data;
 
-		if( pageId < hPage->_numUsedPageIds )
+		if( pageId <= hPage->_numUsedPageIds )	//NumUsedPageIds counts only the data pages used within this header
+												//data pages start from 1 and go up
+												//pageId is not necessarily equal to page number (i.e. for header pages > 0, it is a module of page number and num_of_page_ids, so it varies between [1, num_page_ids))
+												//for this reason, the comparison between pageId and and numUsedPageIds is inclusive
 		{
 			//assign a found page id
 			retHeaderPage = headerPageId;
@@ -1341,6 +1347,13 @@ RC RecordBasedFileManager::scan(FileHandle &fileHandle,
 	rbfm_ScanIterator._recordDescriptor = recordDescriptor;
 	rbfm_ScanIterator._slotnum = 0;
 	rbfm_ScanIterator._value = value;
+	//prior misunderstanding of the reason for attributeNames, lead me to belief that
+	//the argument was a duplicate to recordDescriptor with the exception that it was
+	//storing strings instead of attributes
+	//As far as I can see, it stores a list of attributes, whose values needs to be
+	//returned, so it is a subset of recordDescriptor, but it does not have to be
+	//always equal to recordDescriptor.
+	rbfm_ScanIterator._attributes = attributeNames;
 
 	//return success
 	return 0;
@@ -1473,6 +1486,11 @@ RC RBFM_ScanIterator::close()
 	_recordDescriptor.clear();
 	_slotnum = (unsigned int)-1;
 	_value = NULL;
+	RC errCode = 0;
+	if( (errCode = RecordBasedFileManager::instance()->closeFile(_fileHandle)) != 0 )
+	{
+		return errCode;
+	}
 	return 0;
 }
 
@@ -1545,9 +1563,20 @@ RC	RBFM_ScanIterator::getNextRecord(RID &rid, void* data)
 
 		//loop thru record using stored record descriptor
 		void* ptrField = curRecord;
+		std::map<string, AttrType> matchNameToSize;
+
 		vector<Attribute>::iterator i = _recordDescriptor.begin(), max = _recordDescriptor.end();
+
+		//setup matcher
 		for( ; i != max; i++ )
 		{
+			matchNameToSize.insert(std::pair<string, AttrType>( i->name, i->type ));
+		}
+
+		//loop thru record elements to determine if it is matching
+		for( i = _recordDescriptor.begin(); i != max; i++ )
+		{
+
 			unsigned int szOfField = 0;
 
 			switch( i->type )
@@ -1622,13 +1651,40 @@ RC	RBFM_ScanIterator::getNextRecord(RID &rid, void* data)
 				if( isMatching )
 				{
 					//determine exact size of record
-					unsigned int szOfRecord = sizeOfRecord(_recordDescriptor, curRecord);
+					//unsigned int szOfRecord = sizeOfRecord(_recordDescriptor, curRecord);
 
-					//copy record to the data
-					memcpy(data, curRecord, szOfRecord);
+					//priorly misunderstood function be: copy record to the data
+					//memcpy(data, curRecord, szOfRecord);
+					//copy only fields that are directly mentioned inside _attributes
+					std::vector<string>::iterator selectAttrIter = _attributes.begin(),
+							selectAttrEnd = _attributes.end();
+
+					void* ptrOfCurRecord = curRecord;
+
+					for( ; selectAttrIter != selectAttrEnd; selectAttrIter++ )
+					{
+						int attrSz = 0;
+						switch(matchNameToSize.at(*selectAttrIter))
+						{
+						case AttrType(0):	//Integer
+							attrSz = sizeof(int);
+							memcpy(data, curRecord, attrSz);
+							break;
+						case AttrType(1):	//Real
+							attrSz = sizeof(float);
+							memcpy(data, curRecord, attrSz);
+							break;
+						case AttrType(2):	//VarChar
+							attrSz = *((unsigned int*)curRecord) + sizeof(unsigned int);
+							memcpy(data, curRecord, attrSz);
+							break;
+						}
+						data += attrSz;
+						curRecord += attrSz;
+					}
 
 					//deallocate space for record
-					free(curRecord);
+					free(ptrOfCurRecord);
 
 					//increment internal slot counter to next item
 					_slotnum++;
