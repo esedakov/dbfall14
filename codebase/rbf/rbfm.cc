@@ -606,7 +606,7 @@ RC RecordBasedFileManager::printRecord(const vector<Attribute> &recordDescriptor
 		//depending on the type of element, do a separate conversion and printing actions
 		switch(i->type)
 		{
-		case TypeInt:
+		case AttrType(0):
 			//get integer by casting current pointer to an integer array and grabbing the first element (NOTE: ptr is the current offset within data)
 			ival = ((int*)ptr)[0];
 
@@ -617,7 +617,7 @@ RC RecordBasedFileManager::printRecord(const vector<Attribute> &recordDescriptor
 			ptr = (void*)((char*)ptr + sizeof(int));
 
 			break;
-		case TypeReal:
+		case AttrType(1):
 			//get real (i.e. float) by casting current pointer offset of data to a float array and grabbing the first element
 			fval = ((float*)ptr)[0];
 
@@ -628,7 +628,7 @@ RC RecordBasedFileManager::printRecord(const vector<Attribute> &recordDescriptor
 			ptr = (void*)((char*)ptr + sizeof(float));
 
 			break;
-		case TypeVarChar:
+		case AttrType(2):
 			//this element is slightly more complex, i.e. it is a tuple <int, char*>:
 			//first element of tuple is a size of character array, which is a second element of tuple
 
@@ -680,21 +680,21 @@ unsigned int sizeOfRecord(const vector<Attribute> &recordDescriptor, const void 
 	{
 		switch( i->type )
 		{
-		case TypeInt:
+		case AttrType(0):
 			//sum field size of int
 			size += sizeof(int);
 
 			//increment to the next field
 			data = (void*)((char*)data + sizeof(int));
 			break;
-		case TypeReal:
+		case AttrType(1):
 			//sum field size of float
 			size += sizeof(float);
 
 			//increment to the next field
 			data = (void*)((char*)data + sizeof(float));
 			break;
-		case TypeVarChar:
+		case AttrType(2):
 			//get integer that represent size of char-array and add it to the size
 			szOfCharArr = ((unsigned int*)(data))[0];
 			size += sizeof(int) + szOfCharArr;
@@ -1042,13 +1042,13 @@ RC RecordBasedFileManager::readAttribute(FileHandle &fileHandle, const vector<At
 			//determine size of requested attribute
 			switch((*i).type)
 			{
-			case TypeInt:
+			case AttrType(0):
 				sz = sizeof(int);
 				break;
-			case TypeReal:
+			case AttrType(1):
 				sz = sizeof(float);
 				break;
-			case TypeVarChar:
+			case AttrType(2):
 				sz = *((unsigned int*)curPtr);
 				curPtr += sizeof(int);
 				break;
@@ -1066,13 +1066,13 @@ RC RecordBasedFileManager::readAttribute(FileHandle &fileHandle, const vector<At
 		//increment current pointer within record buffer to the next element
 		switch((*i).type)
 		{
-		case TypeInt:
+		case AttrType(0):
 			curPtr += sizeof(int);
 			break;
-		case TypeReal:
+		case AttrType(1):
 			curPtr += sizeof(float);
 			break;
-		case TypeVarChar:
+		case AttrType(2):
 			curPtr += sizeof(int) + ((unsigned int)*curPtr);
 			break;
 		}
@@ -1552,15 +1552,15 @@ RC	RBFM_ScanIterator::getNextRecord(RID &rid, void* data)
 
 			switch( i->type )
 			{
-			case TypeInt:
+			case AttrType(0):
 				//setup size of field as integer
 				szOfField = sizeof(int);
 				break;
-			case TypeReal:
+			case AttrType(1):
 				//setup size of field as float
 				szOfField = sizeof(int);
 				break;
-			case TypeVarChar:
+			case AttrType(2):
 				//setup size of field as integer
 				szOfField = ((unsigned int*)curRecord)[0];
 
@@ -1578,7 +1578,7 @@ RC	RBFM_ScanIterator::getNextRecord(RID &rid, void* data)
 				if( _compO != NO_OP )
 				{
 					int cmpValue = 0;
-					if( i->type == TypeVarChar )
+					if( i->type == AttrType(2) )
 					{
 						cmpValue = strncmp((char*)ptrField, (char*)_value, szOfField);
 					}

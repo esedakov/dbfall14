@@ -31,42 +31,42 @@ void createRecordDescriptorForTwitterUser(vector<Attribute> &recordDescriptor) {
 
 	Attribute attr;
 	attr.name = "userid";
-	attr.type = TypeInt;
+	attr.type = AttrType(0);
 	attr.length = (AttrLength) 4;
 	recordDescriptor.push_back(attr);
 
 	attr.name = "screen_name";
-	attr.type = TypeVarChar;
+	attr.type = AttrType(2);
 	attr.length = (AttrLength) 300;
 	recordDescriptor.push_back(attr);
 
 	attr.name = "lang";
-	attr.type = TypeVarChar;
+	attr.type = AttrType(2);
 	attr.length = (AttrLength) 300;
 	recordDescriptor.push_back(attr);
 
 	attr.name = "friends_count";
-	attr.type = TypeInt;
+	attr.type = AttrType(0);
 	attr.length = (AttrLength) 4;
 	recordDescriptor.push_back(attr);
 
 	attr.name = "statuses_count";
-	attr.type = TypeInt;
+	attr.type = AttrType(0);
 	attr.length = (AttrLength) 4;
 	recordDescriptor.push_back(attr);
 
 	attr.name = "username";
-	attr.type = TypeVarChar;
+	attr.type = AttrType(2);
 	attr.length = (AttrLength) 300;
 	recordDescriptor.push_back(attr);
 
 	attr.name = "followers_count";
-	attr.type = TypeInt;
+	attr.type = AttrType(0);
 	attr.length = (AttrLength) 4;
 	recordDescriptor.push_back(attr);
 
 	attr.name = "satisfaction_score";
-	attr.type = TypeReal;
+	attr.type = AttrType(1);
 	attr.length = (AttrLength) 4;
 	recordDescriptor.push_back(attr);
 
@@ -196,32 +196,32 @@ void createRecordDescriptorForTweetMessage(
 
 	Attribute attr;
 	attr.name = "tweetid";
-	attr.type = TypeInt;
+	attr.type = AttrType(0);
 	attr.length = (AttrLength) 4;
 	recordDescriptor.push_back(attr);
 
 	attr.name = "userid";
-	attr.type = TypeInt;
+	attr.type = AttrType(0);
 	attr.length = (AttrLength) 4;
 	recordDescriptor.push_back(attr);
 
 	attr.name = "sender_location";
-	attr.type = TypeReal;
+	attr.type = AttrType(1);
 	attr.length = (AttrLength) 4;
 	recordDescriptor.push_back(attr);
 
 	attr.name = "send_time";
-	attr.type = TypeReal;
+	attr.type = AttrType(1);
 	attr.length = (AttrLength) 4;
 	recordDescriptor.push_back(attr);
 
 	attr.name = "referred_topics";
-	attr.type = TypeVarChar;
+	attr.type = AttrType(2);
 	attr.length = (AttrLength) 500;
 	recordDescriptor.push_back(attr);
 
 	attr.name = "message_text";
-	attr.type = TypeVarChar;
+	attr.type = AttrType(2);
 	attr.length = (AttrLength) 500;
 	recordDescriptor.push_back(attr);
 
