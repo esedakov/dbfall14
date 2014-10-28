@@ -13,15 +13,23 @@ int main()
 
     // Create Table tbl_employee
     createTable("tbl_employee");
+    rm->printTable(CATALOG_TABLE_NAME);
+    rm->printTable(CATALOG_COLUMN_NAME);
 
     // Create Table tbl_employee2
     createTable("tbl_employee2");
+    rm->printTable(CATALOG_TABLE_NAME);
+    rm->printTable(CATALOG_COLUMN_NAME);
 
     // Create Table tbl_employee3
     createTable("tbl_employee3");
+    rm->printTable(CATALOG_TABLE_NAME);
+    rm->printTable(CATALOG_COLUMN_NAME);
     
     // Create Table tbl_employee4
     createLargeTable("tbl_employee4");
+    rm->printTable(CATALOG_TABLE_NAME);
+    rm->printTable(CATALOG_COLUMN_NAME);
 
     return 0;
 }
