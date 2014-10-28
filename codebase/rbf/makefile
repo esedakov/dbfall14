@@ -1,7 +1,7 @@
 
 include ../makefile.inc
 
-all: librbf.a rbftest rbftest11a rbftest11b rbftest12 rbftest13 rbftest14 rbftest15 rbftest16
+-all: librbf.a rbftest rbftest11a rbftest11b rbftest12 rbftest13 rbftest14 rbftest15 rbftest16
 
 # lib file dependencies
 librbf.a: librbf.a(pfm.o)  # and possibly other .o files
