@@ -1058,7 +1058,8 @@ RC RelationManager::readTuple(const string &tableName, const RID &rid,
 	if ((errCode = _rbfm->readRecord(fileHandle, attrs, rid, data)) != 0)
 		return errCode;
 
-	_rbfm->closeFile(fileHandle);
+	if( (errCode = _rbfm->closeFile(fileHandle)) != 0 )
+		return errCode;
 
 	return errCode;
 }
