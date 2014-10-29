@@ -1052,8 +1052,8 @@ RC RecordBasedFileManager::readAttribute(FileHandle &fileHandle, const vector<At
 				sz = sizeof(float);
 				break;
 			case TypeVarChar:
-				sz = *((unsigned int*)curPtr);
-				curPtr += sizeof(int);
+				sz = *((unsigned int*)curPtr) + sizeof(unsigned int);
+				//curPtr += sizeof(int);
 				break;
 			}
 

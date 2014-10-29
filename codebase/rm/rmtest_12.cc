@@ -8,7 +8,7 @@ void TEST_RM_12(const string &tableName, vector<RID> &rids)
     cout << "****In Test case 12****" << endl;
 
     //added
-    rm->printTable(tableName);
+    //rm->printTable(tableName);
 
     int numTuples = 2000;
     RC rc = 0;
@@ -28,7 +28,7 @@ void TEST_RM_12(const string &tableName, vector<RID> &rids)
     cout << "After deletion!" << endl;
 
     //added
-    rm->printTable(tableName);
+    //rm->printTable(tableName);
 
     for(int i = 1000; i < 2000; i++)
     {
