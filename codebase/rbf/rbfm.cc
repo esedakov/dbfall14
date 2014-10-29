@@ -1574,15 +1574,15 @@ RC	RBFM_ScanIterator::getNextRecord(RID &rid, void* data)
 
 		//loop thru record using stored record descriptor
 		void* ptrField = curRecord;
-		std::map<string, AttrType> matchNameToSize;
+		//std::map<string, AttrType> matchNameToSize;
 
 		vector<Attribute>::iterator i = _recordDescriptor.begin(), max = _recordDescriptor.end();
 
 		//setup matcher
-		for( ; i != max; i++ )
-		{
-			matchNameToSize.insert(std::pair<string, AttrType>( i->name, i->type ));
-		}
+		//for( ; i != max; i++ )
+		//{
+		//	matchNameToSize.insert(std::pair<string, AttrType>( i->name, i->type ));
+		//}
 
 		//loop thru record elements to determine if it is matching
 		for( i = _recordDescriptor.begin(); i != max; i++ )
@@ -1672,26 +1672,50 @@ RC	RBFM_ScanIterator::getNextRecord(RID &rid, void* data)
 
 					void* ptrOfCurRecord = curRecord;
 
+					//loop thru fields that needs to be placed into select set
 					for( ; selectAttrIter != selectAttrEnd; selectAttrIter++ )
 					{
-						int attrSz = 0;
-						switch(matchNameToSize.at(*selectAttrIter))
+						//reset current record pointer
+						curRecord = ptrOfCurRecord;
+
+						//another alternative I can think of is to use readAttribute function which would be called from within this loop at every iteration
+						//to read the record fields into the data buffer
+						//loop thru all fields of record to determine proper starting offset of the selected attribute
+						std::vector<Attribute>::iterator allAttrIter = _recordDescriptor.begin(), allAttrEnd = _recordDescriptor.end();
+						for( ; allAttrIter != allAttrEnd; allAttrIter++ )
 						{
-						case AttrType(0):	//Integer
-							attrSz = sizeof(int);
-							memcpy(data, curRecord, attrSz);
-							break;
-						case AttrType(1):	//Real
-							attrSz = sizeof(float);
-							memcpy(data, curRecord, attrSz);
-							break;
-						case AttrType(2):	//VarChar
-							attrSz = *((unsigned int*)curRecord) + sizeof(unsigned int);
-							memcpy(data, curRecord, attrSz);
-							break;
+							//add size of attribute to data, which stores the set of selected fields
+							int attrSz = 0;
+							switch(allAttrIter->type)
+							{
+							case AttrType(0):	//Integer
+								attrSz = sizeof(int);
+								//memcpy(data, curRecord, attrSz);
+								break;
+							case AttrType(1):	//Real
+								attrSz = sizeof(float);
+								//memcpy(data, curRecord, attrSz);
+								break;
+							case AttrType(2):	//VarChar
+								attrSz = *((unsigned int*)curRecord) + sizeof(unsigned int);
+								//memcpy(data, curRecord, attrSz);
+								break;
+							}
+
+							//if the iterated attribute is the one selected, then
+							if( allAttrIter->name == *selectAttrIter )
+							{
+								//copy it into the data buffer
+								memcpy(data, curRecord, attrSz);
+
+								//increment the data buffer pointer
+								data = (void*)((char*)data + attrSz);
+
+								//go to the next selected attribute
+								break;
+							}
+							curRecord = (void*)((char*)curRecord + attrSz);
 						}
-						data = (void*)((char*)data + attrSz);
-						curRecord = (void*)((char*)curRecord + attrSz);
 					}
 
 					//deallocate space for record
