@@ -97,6 +97,26 @@ RC PagedFileManager::createFile(const char *fileName)
 	return 0;
 }
 
+int PagedFileManager::countNumberOfOpenedInstances(const char* fileName)
+{
+	//check for illegal file name
+	if( fileName == NULL || strlen(fileName) == 0 )
+	{
+		return -14;
+	}
+
+	//iterator that should point to the item in _files
+	std::map<std::string, FileInfo>::iterator iter;
+
+	//get the record of this file from _files
+	if( ( iter = _files.find(std::string(fileName)) ) == _files.end() )
+	{
+		return -4;	//cannot delete, because this file does not exist
+	}
+
+	//make sure that file to be deleted is not opened/used
+	return (int)(iter->second._numOpen);
+}
 
 RC PagedFileManager::destroyFile(const char *fileName)
 {

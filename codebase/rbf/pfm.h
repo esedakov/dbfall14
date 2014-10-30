@@ -45,6 +45,7 @@ public:
 
     RC createFile    (const char *fileName);                         // Create a new file
     RC destroyFile   (const char *fileName);                         // Destroy a file
+    int countNumberOfOpenedInstances(const char* fileName);
     RC openFile      (const char *fileName, FileHandle &fileHandle); // Open a file
     RC closeFile     (FileHandle &fileHandle);                       // Close a file
 
