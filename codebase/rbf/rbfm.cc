@@ -384,6 +384,9 @@ RC RecordBasedFileManager::findRecordSlot(FileHandle &fileHandle, PageNum pagenu
 	//if size of free space is not enough return -22 (because it was suppose to be enough, since this page was found by method getPage)
 	if( szOfFreeSpace < szRecord )
 	{
+		//lower number of assigned slots
+		*ptrNumSlots -= 1;
+
 		//free data
 		free(data);
 
@@ -418,20 +421,145 @@ RC RecordBasedFileManager::findRecordSlot(FileHandle &fileHandle, PageNum pagenu
 	return errCode;
 }
 
-RC RecordBasedFileManager::insertRecord(FileHandle &fileHandle, const vector<Attribute> &recordDescriptor, const void *data, RID &rid) {
+void RecordBasedFileManager::decodeRecord(
+		const vector<Attribute>& recordDescriptor,
+		const void* encodedRecordData,
+		unsigned int& decodedSize,
+		void* decodedRecordData)
+{
+	//calculate size of record directory
+	unsigned int szOfDir = sizeof(unsigned int) * (recordDescriptor.size() + 1);
+
+	//loop thru record fields (both data and attributes)
+
+	//setup parameters for the loop
+	std::vector<Attribute>::const_iterator iterator = recordDescriptor.begin(), max = recordDescriptor.end();
+	const void* curDir = encodedRecordData, *ptrInEncodedData = (void*)((char*)encodedRecordData + szOfDir);
+	void* ptrInDecodedRecord = decodedRecordData;
+
+	//loop
+	for( ; iterator != max; iterator++ )
+	{
+		//calculate size of the record field
+		unsigned int szOfField = 0;
+		switch(iterator->type)
+		{
+		case TypeInt:
+			szOfField = sizeof(unsigned int);
+			break;
+		case TypeReal:
+			szOfField = sizeof(float);
+			break;
+		case TypeVarChar:
+			szOfField = *( ((unsigned int*)curDir) + 1 ) - *( (unsigned int*)curDir );	//next offset - current offset
+
+			//place length into decoded record data
+			*((unsigned int*)ptrInDecodedRecord) = szOfField;
+
+			//update pointer
+			ptrInDecodedRecord = (void*)((char*)ptrInDecodedRecord + sizeof(unsigned int));
+
+			//update size of decoded record by size of the integer that stores field length
+			decodedSize += sizeof(unsigned int);
+			break;
+		}
+
+		//update size of decoded record by size of the field
+		decodedSize += szOfField;
+
+		//copy data
+		memcpy(ptrInDecodedRecord, ptrInEncodedData, szOfField);
+
+		//update pointers
+		curDir = (void*)((char*)curDir + sizeof(unsigned int));
+		ptrInEncodedData = (void*)((char*)ptrInEncodedData + szOfField);
+		ptrInDecodedRecord = (void*)((char*)ptrInDecodedRecord + szOfField);
+	}
+}
+
+void RecordBasedFileManager::encodeRecord(
+		const std::vector<Attribute> &recordDescriptor,
+		const void* originalRecordData,
+		const unsigned int origSize,
+		unsigned int& newSzOfRecord,
+		void* newRecordData)
+{
+	//calculate size of "record directory of offsets"
+	unsigned int szOfDir = sizeof(unsigned int) * (recordDescriptor.size() + 1);	//one extra offset "points" at the end of the last record
+
+	//loop thru record fields (both data and attributes)
+
+	//set the new size of the record to 0
+	newSzOfRecord = 0;
+
+	//setup parameters for the loop
+	std::vector<Attribute>::const_iterator iterator = recordDescriptor.begin(), max = recordDescriptor.end();
+	void *ptrEncRecordData = (void*)((char*)newRecordData + szOfDir), *ptrEncDirRecord = newRecordData;
+	const void *ptrOrigRecord = originalRecordData;
+	unsigned int curOffset = szOfDir;
+
+	//loop
+	for( ; iterator != max; iterator++ )
+	{
+		//determine size of the field
+		unsigned int szOfField = 0;
+		switch( iterator->type )
+		{
+		case TypeInt:
+			szOfField = sizeof(unsigned int);
+			break;
+		case TypeReal:
+			szOfField = sizeof(float);
+			break;
+		case TypeVarChar:
+			szOfField = *((unsigned int*)ptrOrigRecord);
+
+			//update pointer of original record (so that it points at data; right now it points at its length)
+			ptrOrigRecord = (void*)((char*)ptrOrigRecord + sizeof(unsigned int));
+			break;
+		}
+
+		//update size of the encoded record by the current field
+		newSzOfRecord += sizeof(unsigned int) + szOfField;
+
+		//write offset of field in the "record directory of offsets"
+		*((unsigned int*)ptrEncDirRecord) = curOffset;
+
+		//update offset
+		curOffset += szOfField;
+
+		//write field into appropriate spot in encoded record
+		memcpy(ptrEncRecordData, ptrOrigRecord, szOfField);
+
+		//update pointers
+		ptrEncRecordData = (void*)((char*)ptrEncRecordData + szOfField);
+		ptrEncDirRecord = (void*)((char*)ptrEncDirRecord + sizeof(unsigned int));
+		ptrOrigRecord = (void*)((char*)ptrOrigRecord + szOfField);
+	}
+
+	//write the last offset
+	*((unsigned int*)ptrEncDirRecord) = curOffset;
+
+	//update size of the current field
+	newSzOfRecord += sizeof(unsigned int);
+}
+
+RC RecordBasedFileManager::insertRecord(FileHandle &fileHandle, const vector<Attribute> &recordDescriptor, const void *origData, RID &rid) {
 	RC errCode = 0;
 
 	//check if data is not NULL
-	if( data == NULL )
+	if( origData == NULL )
 	{
 		return -11; //data is corrupted
 	}
 
-	//determine size of given record
-	unsigned int recordSize = sizeOfRecord(recordDescriptor, data);
+	//encode record
+	void* encData = malloc(PAGE_SIZE);
+	unsigned int szOfEncRecord = 0;
+	encodeRecord(recordDescriptor, origData, sizeOfRecord(recordDescriptor, origData), szOfEncRecord, encData);
 
 	//check if data is not greater than a max allowed space within the page
-	if( recordSize >= MAX_SIZE_OF_RECORD )
+	if( szOfEncRecord >= MAX_SIZE_OF_RECORD )
 	{
 		return -21;	//record exceeds page size (less required page meta-data)
 	}
@@ -440,17 +568,24 @@ RC RecordBasedFileManager::insertRecord(FileHandle &fileHandle, const vector<Att
 
 	//get page that contains the necessary amount of free space
 	PageNum datapagenum = 0, headerpagenum = 0;
-	if( (errCode = getDataPage(fileHandle, recordSize, datapagenum, headerpagenum, freeSpaceLeft)) != 0 )
+	if( (errCode = getDataPage(fileHandle, szOfEncRecord, datapagenum, headerpagenum, freeSpaceLeft)) != 0 )
 	{
-		//if there been error while getting the page => return this error code
+		//free buffer used for encoded record
+		free(encData);
+
+		//return error code
 		return errCode;
 	}
 
 	//get the place for the new record in the found data page
 	PageDirSlot pds;
 	unsigned int slotNum = 0;
-	if( (errCode = findRecordSlot(fileHandle, datapagenum, recordSize, pds, slotNum, freeSpaceLeft)) != 0 )
+	if( (errCode = findRecordSlot(fileHandle, datapagenum, szOfEncRecord, pds, slotNum, freeSpaceLeft)) != 0 )
 	{
+		//free buffer used for encoded record
+		free(encData);
+
+		//return error code
 		return errCode;
 	}
 
@@ -459,6 +594,11 @@ RC RecordBasedFileManager::insertRecord(FileHandle &fileHandle, const vector<Att
 	memset(dataPage, 0, PAGE_SIZE);
 	if( (errCode = fileHandle.readPage(datapagenum, dataPage)) != 0 )
 	{
+		//free buffer used for encoded record
+		free(encData);
+		free(dataPage);
+
+		//return error code
 		return errCode;
 	}
 
@@ -466,20 +606,22 @@ RC RecordBasedFileManager::insertRecord(FileHandle &fileHandle, const vector<Att
 	char* ptrRecord = (char*)dataPage + pds._offRecord;
 
 	//copy data of the record
-	memcpy(ptrRecord, data, recordSize);
+	memcpy(ptrRecord, encData, szOfEncRecord);
 
 	//write page to the file
 	if( (errCode = fileHandle.writePage(datapagenum, dataPage)) != 0 )
 	{
-		//deallocate data page
+		//free buffer used for encoded record
+		free(encData);
 		free(dataPage);
 
-		//return error
+		//return error code
 		return errCode;
 	}
 
 	//deallocate dataPage
 	free(dataPage);
+	free(encData);
 
 	//assign rid
 	rid.pageNum = datapagenum;
@@ -489,7 +631,7 @@ RC RecordBasedFileManager::insertRecord(FileHandle &fileHandle, const vector<Att
 	return 0;
 }
 
-RC RecordBasedFileManager::readRecord(FileHandle &fileHandle, const vector<Attribute> &recordDescriptor, const RID &rid, void *data) {
+RC RecordBasedFileManager::readEncodedRecord(FileHandle &fileHandle, const vector<Attribute> &recordDescriptor, const RID &rid, void *data) {
     RC errCode = 0;
 
     if( data == NULL )
@@ -564,7 +706,7 @@ RC RecordBasedFileManager::readRecord(FileHandle &fileHandle, const vector<Attri
     	RID* ptrNewRid = (RID*)ptrRecord;
 
     	//now go ahead and try to read this record
-    	errCode = readRecord(fileHandle, recordDescriptor, *ptrNewRid, data);
+    	errCode = readEncodedRecord(fileHandle, recordDescriptor, *ptrNewRid, data);
 
     	//free data page (fixing memory leak)
     	free(dataPage);
@@ -573,7 +715,7 @@ RC RecordBasedFileManager::readRecord(FileHandle &fileHandle, const vector<Attri
     }
     //end section for project 2
 
-    //copy record contents
+    //copy encoded record contents
     memcpy(data, ptrRecord, szRecord);
 
     //deallocate data page
@@ -581,6 +723,26 @@ RC RecordBasedFileManager::readRecord(FileHandle &fileHandle, const vector<Attri
 
     //return success
     return errCode;
+}
+
+RC RecordBasedFileManager::readRecord(FileHandle &fileHandle, const vector<Attribute> &recordDescriptor, const RID &rid, void *data)
+{
+	RC errCode = 0;
+
+	//allocate buffer for storing encoded record
+	void* encDataRecord = malloc(PAGE_SIZE);
+
+	//read encoded record
+	if( (errCode = readEncodedRecord(fileHandle, recordDescriptor, rid, encDataRecord)) != 0 )
+	{
+		return errCode;
+	}
+
+	//decode record
+	unsigned int decodedSz = 0;
+	decodeRecord(recordDescriptor, encDataRecord, decodedSz, data);
+
+	return errCode;
 }
 
 RC RecordBasedFileManager::printRecord(const vector<Attribute> &recordDescriptor, const void *data) {
@@ -850,7 +1012,7 @@ RC RecordBasedFileManager::deleteRecord(FileHandle &fileHandle, const vector<Att
 	return errCode;
 }
 
-RC RecordBasedFileManager::updateRecord(FileHandle &fileHandle, const vector<Attribute> &recordDescriptor, const void *data, const RID &rid)
+RC RecordBasedFileManager::updateRecord(FileHandle &fileHandle, const vector<Attribute> &recordDescriptor, const void *origData, const RID &rid)
 {
 	RC errCode = 0;
 
@@ -882,21 +1044,28 @@ RC RecordBasedFileManager::updateRecord(FileHandle &fileHandle, const vector<Att
 	//get a pointer to the "old record"
 	char* oldRecord = (char*)dataPage + curDirSlot->_offRecord;
 
+	//encode record
+	void* encRecordData = malloc(PAGE_SIZE);
+	unsigned int szOfEncRecord = 0;
+	encodeRecord(recordDescriptor, origData, sizeOfRecord(recordDescriptor, origData), szOfEncRecord, encRecordData);
+
+	//newSize = sizeOfRecord(recordDescriptor, data),
 	//determine if the sizes of the old record (stored in a file) and a new one (stored in data) are the same
-	unsigned int newSize = sizeOfRecord(recordDescriptor, data), oldSize = curDirSlot->_szRecord;
+	unsigned int oldSize = curDirSlot->_szRecord;
 
 	//if size is the same, then just replace content of the old record (in the file) with the newly arrived one => it should fit inside
-	if( newSize == oldSize )
+	if( szOfEncRecord == oldSize )
 	{
 
 		//copy contents of data into the "old record"
-		memcpy(oldRecord, data, newSize);
+		memcpy(oldRecord, encRecordData, szOfEncRecord);
 
 		//write back the data page
 		if( (errCode = fileHandle.writePage(rid.pageNum, dataPage)) != 0 )
 		{
 			//free data page
 			free(dataPage);
+			free(encRecordData);
 
 			//return error code
 			return errCode;
@@ -939,7 +1108,7 @@ RC RecordBasedFileManager::updateRecord(FileHandle &fileHandle, const vector<Att
 		unsigned int* ptrNumSlots = (unsigned int*)(endOfDirSlot);
 
 		//pointer to the start of free space
-		char* ptrToFreeSpace = (char*)((char*)data + *( (unsigned int*)( (char*)(endOfDirSlot) + sizeof(unsigned int) ) ));
+		char* ptrToFreeSpace = (char*)((char*)dataPage + *( (unsigned int*)( (char*)(endOfDirSlot) + sizeof(unsigned int) ) ));
 
 		//pointer to the start of the list of directory slots
 		PageDirSlot* startOfDirSlot = (PageDirSlot*)( endOfDirSlot - (*ptrNumSlots) );
@@ -954,6 +1123,7 @@ RC RecordBasedFileManager::updateRecord(FileHandle &fileHandle, const vector<Att
 
 			//free data page
 			free(dataPage);
+			free(encRecordData);
 
 			//fail
 			return -25;
@@ -966,16 +1136,17 @@ RC RecordBasedFileManager::updateRecord(FileHandle &fileHandle, const vector<Att
 		reorganizePage(fileHandle, recordDescriptor, rid.pageNum);
 
 		//update oldRecord variable, since now it is likely to be at different position within this page
-		oldRecord = (char*)data + curDirSlot->_offRecord;
+		oldRecord = (char*)dataPage + curDirSlot->_offRecord;
 
 	}
 
 	//insert a new record
 	RID newRid = {0,0};
-	if( (errCode = insertRecord(fileHandle, recordDescriptor, data, newRid)) != 0 )
+	if( (errCode = insertRecord(fileHandle, recordDescriptor, origData, newRid)) != 0 )
 	{
 		//free data page
 		free(dataPage);
+		free(encRecordData);
 
 		//return error code
 		return errCode;
@@ -994,6 +1165,7 @@ RC RecordBasedFileManager::updateRecord(FileHandle &fileHandle, const vector<Att
 	{
 		//free data page
 		free(dataPage);
+		free(encRecordData);
 
 		//return error code
 		return errCode;
@@ -1001,6 +1173,7 @@ RC RecordBasedFileManager::updateRecord(FileHandle &fileHandle, const vector<Att
 
 	//free data page
 	free(dataPage);
+	free(encRecordData);
 
 	//return success
 	return errCode;
@@ -1019,7 +1192,7 @@ RC RecordBasedFileManager::readAttribute(FileHandle &fileHandle, const vector<At
 	//allocate buffer of the maximum record size
 	char* recordBuf = (char*) malloc(MAX_SIZE_OF_RECORD);
 
-	if( (errCode = readRecord(fileHandle, recordDescriptor, rid, recordBuf)) != 0 )
+	if( (errCode = readEncodedRecord(fileHandle, recordDescriptor, rid, recordBuf)) != 0 )
 	{
 		//free record
 		free(recordBuf);
@@ -1030,15 +1203,17 @@ RC RecordBasedFileManager::readAttribute(FileHandle &fileHandle, const vector<At
 
 	//set errCode to failure, so ONLY if requested attributed is found, it would be changed to success (0), otherwise by default would be a failure (-26)
 	errCode = -26;
+	unsigned int fieldIndex = 0;
 
 	//loop thru record description to find the attribute with specified name
 	vector<Attribute>::const_iterator i = recordDescriptor.begin(), max = recordDescriptor.end();
-	char* curPtr = recordBuf;
+	//char* curPtr = recordBuf;
 	for( ; i != max; i++ )
 	{
 		//check if current vector element is the attribute we are looking for
 		if( (*i).name == attributeName )
 		{
+			/*
 			//define variable to store size
 			unsigned int sz = 0;
 
@@ -1059,6 +1234,29 @@ RC RecordBasedFileManager::readAttribute(FileHandle &fileHandle, const vector<At
 
 			//copy attribute to data
 			memcpy(data, curPtr, sz);
+			*/
+
+			//determine offset from the start of the page to the requested attribute (i.e. field)
+			unsigned int *curOffset = (unsigned int*)(recordBuf) + fieldIndex;
+
+			//calculate size of attribute
+			unsigned int szOfAttribute = *(curOffset + 1) - *curOffset;
+
+			//calculate start of the attribute
+			void* startOfAttribute = (void*)((char*)recordBuf + *curOffset);
+
+			//if this attribute is character array (i.e. VarChar), then need to copy length and then contents of character array
+			if( (*i).type == TypeVarChar )
+			{
+				//copy length first
+				*((unsigned int*)data) = szOfAttribute;
+
+				//increment pointer in data
+				data = (void*)((char*)data + sizeof(unsigned int));
+			}
+
+			//copy contents of attribute to the buffer
+			memcpy(data, startOfAttribute, szOfAttribute);
 
 			//change error code to success
 			errCode = 0;
@@ -1066,19 +1264,8 @@ RC RecordBasedFileManager::readAttribute(FileHandle &fileHandle, const vector<At
 			break;
 		}
 
-		//increment current pointer within record buffer to the next element
-		switch((*i).type)
-		{
-		case TypeInt:
-			curPtr += sizeof(int);
-			break;
-		case TypeReal:
-			curPtr += sizeof(float);
-			break;
-		case TypeVarChar:
-			curPtr += sizeof(int) + ((unsigned int)*curPtr);
-			break;
-		}
+		//increment field index
+		fieldIndex++;
 	}
 
 	//free record buffer
@@ -1388,15 +1575,18 @@ RC RecordBasedFileManager::reorganizeFile(FileHandle &fileHandle, const vector<A
 
 	//insert the records into temp file
 	RID itRid = {0, 0};
-	void* data = malloc(PAGE_SIZE);
-	memset(data, 0, PAGE_SIZE);
+	void* encData = malloc(PAGE_SIZE);
+	memset(encData, 0, PAGE_SIZE);
+
+	//allocate buffer for decoded data
+	void* decodedData = malloc(PAGE_SIZE);
 
 	//create map for storing actual rids for those cases when records are tombStones
 	std::map<RID, RID> tombStoneRids;
 
 	vector<RID> rids;
 
-	while(iterator.getNextRecord(itRid, data) != RBFM_EOF)
+	while(iterator.getNextRecord(itRid, encData) != RBFM_EOF)
 	{
 
 		//get rid (if it is a tombStone, then a returned rid is not going to equal to itRid)
@@ -1426,8 +1616,20 @@ RC RecordBasedFileManager::reorganizeFile(FileHandle &fileHandle, const vector<A
 		}
 		else
 		{
+			//due to the fact that record is encoded and insertRecord expects the data to be decoded, we have to first decode data that we want to insert
+			unsigned int szOfDecodedData = 0;
+			decodeRecord(recordDescriptor, encData, szOfDecodedData, decodedData);
+
 			//otherwise, insert this record
-			insertRecord(tempFileHandle, recordDescriptor, data, itRid);
+			if( (errCode = insertRecord(tempFileHandle, recordDescriptor, decodedData, itRid)) != 0 )
+			{
+				//free buffer used for encoded and decoded data
+				free(encData);
+				free(decodedData);
+
+				//return error code
+				return errCode;
+			}
 
 			rids.push_back(itRid);
 		}
@@ -1444,18 +1646,50 @@ RC RecordBasedFileManager::reorganizeFile(FileHandle &fileHandle, const vector<A
 	//bring back all records to the original file
 	for(unsigned int i = 0; i < rids.size(); i++)
 	{
-		memset(data, 0, PAGE_SIZE);
-		if((errCode=readRecord(tempFileHandle, recordDescriptor, rids[i], data)) != 0)
+		memset(decodedData, 0, PAGE_SIZE);
+		if((errCode=readRecord(tempFileHandle, recordDescriptor, rids[i], decodedData)) != 0)
+		{
+			//free buffers used for encoded and decoded data
+			free(encData);
+			free(decodedData);
+
+			//return error code
 			return errCode;
-		if((errCode=insertRecord(fileHandle, recordDescriptor, data, itRid)) != 0)
+		}
+		if((errCode=insertRecord(fileHandle, recordDescriptor, decodedData, itRid)) != 0)
+		{
+			//free buffers used for encoded and decoded data
+			free(encData);
+			free(decodedData);
+
+			//return error code
 			return errCode;
+		}
 	}
 
-	//close and destroy temp file
+	//close and destroy temporary file
 	if((errCode=_pfm->closeFile(tempFileHandle)) != 0)
+	{
+		//free buffers used for encoded and decoded data
+		free(encData);
+		free(decodedData);
+
+		//return error code
 		return errCode;
+	}
 	if((errCode=_pfm->destroyFile(tempFile.c_str())) != 0)
+	{
+		//free buffers used for encoded and decoded data
+		free(encData);
+		free(decodedData);
+
+		//return error code
 		return errCode;
+	}
+
+	//free buffers used for encoded and decoded data
+	free(encData);
+	free(decodedData);
 
 	return errCode;
 
@@ -1578,12 +1812,6 @@ RC	RBFM_ScanIterator::getNextRecord(RID &rid, void* data)
 
 		vector<Attribute>::iterator i = _recordDescriptor.begin(), max = _recordDescriptor.end();
 
-		//setup matcher
-		//for( ; i != max; i++ )
-		//{
-		//	matchNameToSize.insert(std::pair<string, AttrType>( i->name, i->type ));
-		//}
-
 		//loop thru record elements to determine if it is matching
 		for( i = _recordDescriptor.begin(); i != max; i++ )
 		{
@@ -1664,7 +1892,7 @@ RC	RBFM_ScanIterator::getNextRecord(RID &rid, void* data)
 					//determine exact size of record
 					//unsigned int szOfRecord = sizeOfRecord(_recordDescriptor, curRecord);
 
-					//priorly misunderstood function be: copy record to the data
+					//priorly misunderstood function: copy record to the data
 					//memcpy(data, curRecord, szOfRecord);
 					//copy only fields that are directly mentioned inside _attributes
 					std::vector<string>::iterator selectAttrIter = _attributes.begin(),

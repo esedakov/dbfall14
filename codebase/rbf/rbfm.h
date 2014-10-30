@@ -122,8 +122,12 @@ public:
   //  !!!The same format is used for updateRecord(), the returned data of readRecord(), and readAttribute()
   RC insertRecord(FileHandle &fileHandle, const vector<Attribute> &recordDescriptor, const void *data, RID &rid);
 
+  //read record and decoded it
   RC readRecord(FileHandle &fileHandle, const vector<Attribute> &recordDescriptor, const RID &rid, void *data);
   
+  //read record but do not decode it
+  RC readEncodedRecord(FileHandle &fileHandle, const vector<Attribute> &recordDescriptor, const RID &rid, void *data);
+
   /*
    * get page (if necessary insert new) that has enough free space for specified size of record
   **/
@@ -139,6 +143,23 @@ public:
 
   //get header page that contains the given data page id inside it
   RC findHeaderPage(FileHandle fileHandle, PageNum pageId, PageNum& retHeaderPage);
+
+  //convert record's data (stored by originalRecordData) into new format that allows O(1) field access, which is accomplished through the use of
+  //"record directory of offsets" that stores list of offsets of each field (from the start of the first record to the end of the last record)
+  //NOTE: all of these offsets are measured from the start of the record
+  void encodeRecord(
+		  const vector<Attribute> &recordDescriptor,
+		  const void* originalRecordData,
+		  const unsigned int origSize,
+		  unsigned int& newSzOfRecord,
+		  void* newRecordData);
+
+  //convert encoded record format into original, i.e. by removing "record directory of offsets" and restoring length parameters for the VARCHAR cases
+  void decodeRecord(
+		  const vector<Attribute>& recordDescriptor,
+		  const void* encodedRecordData,
+		  unsigned int& decodedSize,
+		  void* decodedRecordData);
 
 /**************************************************************************************************************************************************************
 ***************************************************************************************************************************************************************
