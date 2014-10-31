@@ -177,22 +177,22 @@ void createTable(const string &tableName)
 
     Attribute attr;
     attr.name = "EmpName";
-    attr.type = TypeVarChar;
+    attr.type = AttrType(2);
     attr.length = (AttrLength)30;
     attrs.push_back(attr);
 
     attr.name = "Age";
-    attr.type = TypeInt;
+    attr.type = AttrType(0);
     attr.length = (AttrLength)4;
     attrs.push_back(attr);
 
     attr.name = "Height";
-    attr.type = TypeReal;
+    attr.type = AttrType(1);
     attr.length = (AttrLength)4;
     attrs.push_back(attr);
 
     attr.name = "Salary";
-    attr.type = TypeInt;
+    attr.type = AttrType(0);
     attr.length = (AttrLength)4;
     attrs.push_back(attr);
 
