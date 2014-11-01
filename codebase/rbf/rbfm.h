@@ -144,6 +144,10 @@ public:
   //get header page that contains the given data page id inside it
   RC findHeaderPage(FileHandle fileHandle, PageNum pageId, PageNum& retHeaderPage);
 
+  //due to changes made for project 2 extra credit, record descriptor might have empty elements in it. They should not count among the real
+  //elements, and this function basically loops thru the list and determines the number of real fields
+  int numOfFieldsInRecordDirectory(const vector<Attribute> recordDescriptor);
+
   //convert record's data (stored by originalRecordData) into new format that allows O(1) field access, which is accomplished through the use of
   //"record directory of offsets" that stores list of offsets of each field (from the start of the first record to the end of the last record)
   //NOTE: all of these offsets are measured from the start of the record

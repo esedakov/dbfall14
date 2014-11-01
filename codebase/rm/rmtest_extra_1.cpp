@@ -177,22 +177,22 @@ void createTable(const string &tableName)
 
     Attribute attr;
     attr.name = "EmpName";
-    attr.type = AttrType(2);
+    attr.type = TypeVarChar;
     attr.length = (AttrLength)30;
     attrs.push_back(attr);
 
     attr.name = "Age";
-    attr.type = AttrType(0);
+    attr.type = TypeInt;
     attr.length = (AttrLength)4;
     attrs.push_back(attr);
 
     attr.name = "Height";
-    attr.type = AttrType(1);
+    attr.type = TypeReal;
     attr.length = (AttrLength)4;
     attrs.push_back(attr);
 
     attr.name = "Salary";
-    attr.type = AttrType(0);
+    attr.type = TypeInt;
     attr.length = (AttrLength)4;
     attrs.push_back(attr);
 
@@ -215,11 +215,13 @@ void RM_TEST_EXTRA_1(const string &tableName, const int nameLength, const string
     void *tuple = malloc(100);
     void *returnedData = malloc(100);
    
+    rm->printTable(tableName);
     // Insert Tuple 
     prepareTuple(nameLength, name, age, height, salary, tuple, &tupleSize);
     int rc = rm->insertTuple(tableName, tuple, rid);
     cout << "rc is " << rc << endl;
     assert(rc == success);
+    rm->printTable(tableName);
 
     // Read Attribute
     rc = rm->readAttribute(tableName, rid, "Salary", returnedData);
@@ -234,9 +236,11 @@ void RM_TEST_EXTRA_1(const string &tableName, const int nameLength, const string
     {
         //cout << "Read attribute passed!" << endl; 
 
+    	rm->printTable(CATALOG_COLUMN_NAME);
         // Drop the attribute
         rc = rm->dropAttribute(tableName, "Salary");
         assert(rc == success);
+        rm->printTable(CATALOG_COLUMN_NAME);
 
         // Read Tuple and print the tuple
         rc = rm->readTuple(tableName, rid, returnedData);

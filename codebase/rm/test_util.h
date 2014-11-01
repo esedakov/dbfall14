@@ -193,22 +193,22 @@ void createTable(const string &tableName)
 
     Attribute attr;
     attr.name = "EmpName";
-    attr.type = AttrType(2);
+    attr.type = TypeVarChar;
     attr.length = (AttrLength)30;
     attrs.push_back(attr);
 
     attr.name = "Age";
-    attr.type = AttrType(0);
+    attr.type = TypeInt;
     attr.length = (AttrLength)4;
     attrs.push_back(attr);
 
     attr.name = "Height";
-    attr.type = AttrType(1);
+    attr.type = TypeReal;
     attr.length = (AttrLength)4;
     attrs.push_back(attr);
 
     attr.name = "Salary";
-    attr.type = AttrType(0);
+    attr.type = TypeInt;
     attr.length = (AttrLength)4;
     attrs.push_back(attr);
 
@@ -268,7 +268,7 @@ void createLargeTable(const string &tableName)
         sprintf(suffix, "%d", index);
         attr.name = "attr";
         attr.name += suffix;
-        attr.type = AttrType(2);
+        attr.type = TypeVarChar;
         attr.length = (AttrLength)50;
         attrs.push_back(attr);
         index++;
@@ -276,7 +276,7 @@ void createLargeTable(const string &tableName)
         sprintf(suffix, "%d", index);
         attr.name = "attr";
         attr.name += suffix;
-        attr.type = AttrType(0);
+        attr.type = TypeInt;
         attr.length = (AttrLength)4;
         attrs.push_back(attr);
         index++;
@@ -284,7 +284,7 @@ void createLargeTable(const string &tableName)
         sprintf(suffix, "%d", index);
         attr.name = "attr";
         attr.name += suffix;
-        attr.type = AttrType(1);
+        attr.type = TypeReal;
         attr.length = (AttrLength)4;
         attrs.push_back(attr);
         index++;

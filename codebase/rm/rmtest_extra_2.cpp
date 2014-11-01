@@ -158,6 +158,11 @@ void printTupleAfterAdd(const void *buffer, const int tupleSize)
     offset += sizeof(float);
     cout << "height: " << height << endl;
     
+    int salary = 0;
+	memcpy(&salary, (char *)buffer+offset, sizeof(int));
+	offset += sizeof(int);
+	cout << "Salary: " << salary << endl;
+
     int ssn = 0;   
     memcpy(&ssn, (char *)buffer+offset, sizeof(int));
     offset += sizeof(int);
@@ -214,18 +219,37 @@ void RM_TEST_EXTRA_2(const string &tableName, const int nameLength, const string
     void *tuple = malloc(100);
     void *returnedData = malloc(100);
    
+    rm->printTable(CATALOG_COLUMN_NAME);
+
+    string name1 = "Hurakaine";
+    int age1 = 1;
+    float height1 = 3.00f;
+    int salary1 = 9876;
+    RID rid1;
+
+    prepareTuple(nameLength, name1, age1, height1, salary1, tuple, &tupleSize);
+	int rc = rm->insertTuple(tableName, tuple, rid1);
+	cout << "rc is " << rc << endl;
+	assert(rc == success);
+	rm->printTable(tableName);
+	memset(tuple, 0, 100);
+
     // Test Add Attribute
     Attribute attr;
     attr.name = "SSN";
     attr.type = TypeInt;
     attr.length = 4;
-    int rc = rm->addAttribute(tableName, attr);
+    rc = rm->addAttribute(tableName, attr);
     assert(rc == success);
+
+    rm->printTable(CATALOG_COLUMN_NAME);
 
     // Test Insert Tuple
     prepareTupleAfterAdd(nameLength, name, age, height, salary, ssn, tuple, &tupleSize);
     rc = rm->insertTuple(tableName, tuple, rid);
     assert(rc == success);
+
+    rm->printTable(tableName);
 
     // Test Read Tuple
     rc = rm->readTuple(tableName, rid, returnedData);

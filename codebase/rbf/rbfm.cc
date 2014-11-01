@@ -427,14 +427,18 @@ void RecordBasedFileManager::decodeRecord(
 		unsigned int& decodedSize,
 		void* decodedRecordData)
 {
+	//get number of fields in this record
+	unsigned int numFields = *((unsigned int*)encodedRecordData);
+
 	//calculate size of record directory
-	unsigned int szOfDir = sizeof(unsigned int) * (recordDescriptor.size() + 1);
+	unsigned int szOfDir = sizeof(unsigned int) * (numFields + 1);
 
 	//loop thru record fields (both data and attributes)
 
 	//setup parameters for the loop
 	std::vector<Attribute>::const_iterator iterator = recordDescriptor.begin(), max = recordDescriptor.end();
-	const void* curDir = encodedRecordData, *ptrInEncodedData = (void*)((char*)encodedRecordData + szOfDir);
+	const void *curDir = (void*)((char*)encodedRecordData + sizeof(unsigned int)),
+			   *ptrInEncodedData = (void*)((char*)encodedRecordData + szOfDir + sizeof(unsigned int));
 	void* ptrInDecodedRecord = decodedRecordData;
 
 	//loop
@@ -453,27 +457,38 @@ void RecordBasedFileManager::decodeRecord(
 		case TypeVarChar:
 			szOfField = *( ((unsigned int*)curDir) + 1 ) - *( (unsigned int*)curDir );	//next offset - current offset
 
-			//place length into decoded record data
-			*((unsigned int*)ptrInDecodedRecord) = szOfField;
+			//only write out data into the decoded buffer, if the field is not deleted
+			if( iterator->length > 0 )
+			{
+				//place length into decoded record data
+				*((unsigned int*)ptrInDecodedRecord) = szOfField;
 
-			//update pointer
-			ptrInDecodedRecord = (void*)((char*)ptrInDecodedRecord + sizeof(unsigned int));
+				//update size of decoded record by size of the integer that stores field length
+				decodedSize += sizeof(unsigned int);
 
-			//update size of decoded record by size of the integer that stores field length
-			decodedSize += sizeof(unsigned int);
+				//update pointer
+				ptrInDecodedRecord = (void*)((char*)ptrInDecodedRecord + sizeof(unsigned int));
+			}
+
 			break;
 		}
 
-		//update size of decoded record by size of the field
-		decodedSize += szOfField;
+		//only write out data into the decoded buffer, if the field is not deleted
+		if( iterator->length > 0 )
+		{
+			//update size of decoded record by size of the field
+			decodedSize += szOfField;
 
-		//copy data
-		memcpy(ptrInDecodedRecord, ptrInEncodedData, szOfField);
+			//copy data
+			memcpy(ptrInDecodedRecord, ptrInEncodedData, szOfField);
+
+			//update decoded pointer
+			ptrInDecodedRecord = (void*)((char*)ptrInDecodedRecord + szOfField);
+		}
 
 		//update pointers
 		curDir = (void*)((char*)curDir + sizeof(unsigned int));
 		ptrInEncodedData = (void*)((char*)ptrInEncodedData + szOfField);
-		ptrInDecodedRecord = (void*)((char*)ptrInDecodedRecord + szOfField);
 	}
 }
 
@@ -484,6 +499,9 @@ void RecordBasedFileManager::encodeRecord(
 		unsigned int& newSzOfRecord,
 		void* newRecordData)
 {
+	//new record structure includes 3 components
+	//[number of fields:integer][directory of field offsets:List<integer>][list of fields]
+
 	//calculate size of "record directory of offsets"
 	unsigned int szOfDir = sizeof(unsigned int) * (recordDescriptor.size() + 1);	//one extra offset "points" at the end of the last record
 
@@ -497,6 +515,17 @@ void RecordBasedFileManager::encodeRecord(
 	void *ptrEncRecordData = (void*)((char*)newRecordData + szOfDir), *ptrEncDirRecord = newRecordData;
 	const void *ptrOrigRecord = originalRecordData;
 	unsigned int curOffset = szOfDir;
+
+	//place integer representing number of fields into the start of the record (which is
+	//pointed by ptrEncDirRecord, and then increment all pointers by the size of integer)
+		//copy number of fields into the record's body as a first parameter
+		*((unsigned int*)ptrEncDirRecord) = recordDescriptor.size();
+		//update both pointers by the size of the first field (i.e. number of fields in this record)
+		ptrEncDirRecord = (void*)((char*)ptrEncDirRecord + sizeof(unsigned int));
+		ptrEncRecordData = (void*)((char*)ptrEncRecordData + sizeof(unsigned int));
+		//increment size of the decoded record
+		newSzOfRecord += sizeof(unsigned int);
+		curOffset += sizeof(unsigned int);
 
 	//loop
 	for( ; iterator != max; iterator++ )
@@ -512,10 +541,20 @@ void RecordBasedFileManager::encodeRecord(
 			szOfField = sizeof(float);
 			break;
 		case TypeVarChar:
-			szOfField = *((unsigned int*)ptrOrigRecord);
+			//if the field is inside this record (i.e. not dropped) then get length from it
+			if( iterator->length > 0 )
+			{
+				szOfField = *((unsigned int*)ptrOrigRecord);
 
-			//update pointer of original record (so that it points at data; right now it points at its length)
-			ptrOrigRecord = (void*)((char*)ptrOrigRecord + sizeof(unsigned int));
+				//update pointer of original record (so that it points at data; right now it points at its length)
+				ptrOrigRecord = (void*)((char*)ptrOrigRecord + sizeof(unsigned int));
+			}
+			else
+			{
+				//otherwise, this field VarChar has been dropped, so place a "default" value => empty string
+				//empty string in our record field format is [length:integer=0][empty string=""] => total size of sizeOf(integer) = 4 bytes
+				szOfField = 0;
+			}
 			break;
 		}
 
@@ -528,8 +567,13 @@ void RecordBasedFileManager::encodeRecord(
 		//update offset
 		curOffset += szOfField;
 
-		//write field into appropriate spot in encoded record
-		memcpy(ptrEncRecordData, ptrOrigRecord, szOfField);
+		//if the field has been dropped, we still want to keep it inside the record structure, but it would occupy space ONLY inside the record directory
+		//no actual data will be written in at the record's data body
+		if( szOfField > 0 )
+		{
+			//write field into appropriate spot in encoded record
+			memcpy(ptrEncRecordData, ptrOrigRecord, szOfField);
+		}
 
 		//update pointers
 		ptrEncRecordData = (void*)((char*)ptrEncRecordData + szOfField);
@@ -772,22 +816,28 @@ RC RecordBasedFileManager::printRecord(const vector<Attribute> &recordDescriptor
 		switch(i->type)
 		{
 		case TypeInt:
-			//get integer by casting current pointer to an integer array and grabbing the first element (NOTE: ptr is the current offset within data)
-			ival = ((int*)ptr)[0];
+			if( i->length > 0 )
+			{
+				//get integer by casting current pointer to an integer array and grabbing the first element (NOTE: ptr is the current offset within data)
+				ival = ((int*)ptr)[0];
 
-			//print out value and type
-			std::cout << ival << ":Integer";
+				//print out value and type
+				std::cout << ival << ":Integer";
+			}
 
 			//increment PTR by size of integer
 			ptr = (void*)((char*)ptr + sizeof(int));
 
 			break;
 		case TypeReal:
-			//get real (i.e. float) by casting current pointer offset of data to a float array and grabbing the first element
-			fval = ((float*)ptr)[0];
+			if( i->length > 0 )
+			{
+				//get real (i.e. float) by casting current pointer offset of data to a float array and grabbing the first element
+				fval = ((float*)ptr)[0];
 
-			//print out value and type
-			std::cout << fval << ":Real";
+				//print out value and type
+				std::cout << fval << ":Real";
+			}
 
 			//increment PTR by size of float
 			ptr = (void*)((char*)ptr + sizeof(float));
@@ -803,21 +853,24 @@ RC RecordBasedFileManager::printRecord(const vector<Attribute> &recordDescriptor
 			//increment PTR to the start of the second element
 			ptr = (void*)((char*)ptr + sizeof(int));
 
-			//create a character array of this size
-			carr = (char*)malloc(ival + 1);
-			memset(carr, 0, ival + 1);
+			if( i->length > 0 )
+			{
+				//create a character array of this size
+				carr = (char*)malloc(ival + 1);
+				memset(carr, 0, ival + 1);
 
-			//copy content of the second element into this array
-			memcpy((void*)carr, ptr, ival);
+				//copy content of the second element into this array
+				memcpy((void*)carr, ptr, ival);
 
-			//print out character array and type
-			std::cout << carr << ":VarChar";
+				//print out character array and type
+				std::cout << carr << ":VarChar";
+
+				//free char-array
+				free(carr);
+			}
 
 			//increment PTR by iVal (i.e. size of char-array)
 			ptr = (void*)((char*)ptr + ival);
-
-			//free char-array
-			free(carr);
 
 			break;
 		}
@@ -1054,7 +1107,7 @@ RC RecordBasedFileManager::updateRecord(FileHandle &fileHandle, const vector<Att
 	unsigned int oldSize = curDirSlot->_szRecord;
 
 	//if size is the same, then just replace content of the old record (in the file) with the newly arrived one => it should fit inside
-	if( szOfEncRecord == oldSize )
+	if( szOfEncRecord <= oldSize )	//correction made: if old size is equal OR greater than go ahead and use the space of the original record
 	{
 
 		//copy contents of data into the "old record"
@@ -1236,8 +1289,42 @@ RC RecordBasedFileManager::readAttribute(FileHandle &fileHandle, const vector<At
 			memcpy(data, curPtr, sz);
 			*/
 
+			//new structure of the record is as follows:
+			//[number of fields:integer][directory of field offsets:List<Integers>][fields]
+
+			//get the very first element in this record, i.e. number of the fields in this record
+			unsigned int numOfFieldsInThisRecord = *((unsigned int*)recordBuf);
+
+			//need to check if this field actually represented by the value
+			if( numOfFieldsInThisRecord <= fieldIndex )
+			{
+				//if the field index is out of bound, then it must mean that this field was added and the record was never updated
+				//this also means that the field ideally should be returned as a NULL. In our class, there is no NULL data type, so
+				//my guess is to return a default value for the given data type, i.e. "" for VarChar, 0 for Integer, 0.0f for Float.
+				switch( (*i).type )
+				{
+				case TypeInt:
+					*((unsigned int*)data) = 0;
+					break;
+				case TypeReal:
+					*((float*)data) = 0;
+					break;
+				case TypeVarChar:
+					//write the length
+					*((unsigned int*)data) = 0;
+					//no character array follows, since this is an empty string (i.e. length = 0)
+					break;
+				}
+
+				//free the used buffer
+				free(recordBuf);
+
+				//success
+				return 0;
+			}
+
 			//determine offset from the start of the page to the requested attribute (i.e. field)
-			unsigned int *curOffset = (unsigned int*)(recordBuf) + fieldIndex;
+			unsigned int *curOffset = ((unsigned int*)(recordBuf)) + fieldIndex + 1;	//extra one is added because the first element in the record is the number of the fields stored within this record
 
 			//calculate size of attribute
 			unsigned int szOfAttribute = *(curOffset + 1) - *curOffset;
@@ -1263,7 +1350,6 @@ RC RecordBasedFileManager::readAttribute(FileHandle &fileHandle, const vector<At
 
 			break;
 		}
-
 		//increment field index
 		fieldIndex++;
 	}

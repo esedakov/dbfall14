@@ -9,6 +9,10 @@
 //	-30 = attempt to re-create existing table
 //	-31 = accessing/modifying/deleting table that does not exists
 //	-32 = Table of tables corrupted
+//	-33 = invalid write access to system table
+//	-34 = destructive operation on the catalog
+//	-35 = specified column does not exist
+//	-36 = attempting to drop non-existing OR add existing field inside the record
 
 RelationManager* RelationManager::_rm = 0;
 
@@ -26,7 +30,7 @@ void RelationManager::cleanup() {
 
 RC RelationManager::createRecordInTables(FileHandle& tableHandle,
 		const std::vector<Attribute>& table, const char* tableName, int tableId,
-		RID& rid) //NOT TESTED
+		RID& rid)
 		{
 	RC errCode = 0;
 
@@ -75,7 +79,7 @@ RC RelationManager::createRecordInTables(FileHandle& tableHandle,
 RC RelationManager::createRecordInColumns(FileHandle& columnHandle,
 		const std::vector<Attribute>& desc, unsigned int tableId,
 		const char * columnName, AttrType columnType, unsigned int columnLength,
-		RID& rid) //NOT TESTED
+		bool isDropped, RID& rid) //NOT TESTED
 		{
 	RC errCode = 0;
 
@@ -85,8 +89,9 @@ RC RelationManager::createRecordInColumns(FileHandle& columnHandle,
 	//create buffer for storing record
 	void* recordData = malloc(sizeof(unsigned int) + //table_id
 			(sizeof(unsigned int) + lenOfColumnNameField) + //size + column_name
-			sizeof(unsigned int) + //column type
-			sizeof(unsigned int)); //column length
+			sizeof(unsigned int) +	//column type
+			sizeof(unsigned int) +	//column length
+			sizeof(unsigned int));	//column status
 
 	//copy fields into record's buffer
 	char* p = (char*) recordData;
@@ -104,6 +109,9 @@ RC RelationManager::createRecordInColumns(FileHandle& columnHandle,
 	p += sizeof(unsigned int);
 	//column length
 	((unsigned int*) p)[0] = columnLength;
+	p += sizeof(unsigned int);
+	//column status: is this field has been dropped (integer: 1=true, 0=false)
+	((unsigned int*) p)[0] = isDropped ? 1 : 0;
 
 	//insert record
 	if ((errCode = _rbfm->insertRecord(columnHandle, desc, recordData, rid))
@@ -122,7 +130,7 @@ RC RelationManager::createRecordInColumns(FileHandle& columnHandle,
 	return errCode;
 }
 
-void RelationManager::createCatalog() //NOT TESTED
+void RelationManager::createCatalog()
 {
 	//from project description:
 	//	It is mandatory to store the catalog information by using the RBF layer functions.
@@ -202,7 +210,7 @@ void RelationManager::createCatalog() //NOT TESTED
 	//Columns table with the following attributes (table-id, column-name, column-type, column-length)
 	std::vector<Attribute> column;
 	const char* columnDescFields[] = { "table-id", "column-name", "column-type",
-			"column-length" };
+			"column-length", "column-status" };
 	column.push_back(
 			(Attribute) {columnDescFields[0], AttrType(0), sizeof(unsigned int)});
 	column.push_back(
@@ -211,16 +219,18 @@ void RelationManager::createCatalog() //NOT TESTED
 			(Attribute) {columnDescFields[2], AttrType(0), sizeof(unsigned int)});
 	column.push_back(
 			(Attribute) {columnDescFields[3], AttrType(0), sizeof(unsigned int)});
+	column.push_back(
+			(Attribute) {columnDescFields[4], AttrType(0), sizeof(unsigned int)});
 	RID list_of_tableColumn_rids[3];
 
 	if (createRecordInColumns(columnHandle, column, CATALOG_TABLE_ID,
-			table[0].name.c_str(), table[0].type, table[0].length,
+			table[0].name.c_str(), table[0].type, table[0].length, false,
 			list_of_tableColumn_rids[0]) != 0
 			|| createRecordInColumns(columnHandle, column, CATALOG_TABLE_ID,
-					table[1].name.c_str(), table[1].type, table[1].length,
+					table[1].name.c_str(), table[1].type, table[1].length, false,
 					list_of_tableColumn_rids[1]) != 0
 			|| createRecordInColumns(columnHandle, column, CATALOG_TABLE_ID,
-					table[2].name.c_str(), table[2].type, table[2].length,
+					table[2].name.c_str(), table[2].type, table[2].length, false,
 					list_of_tableColumn_rids[2]) != 0) {
 		//abort
 		cleanup();
@@ -231,11 +241,11 @@ void RelationManager::createCatalog() //NOT TESTED
 	//compose list of column information
 	std::vector<ColumnInfo> tableInfo;
 	tableInfo.push_back(
-			(ColumnInfo) {tableDescFields[0], TypeInt, sizeof(unsigned int), list_of_tableColumn_rids[0]});
+			(ColumnInfo) {tableDescFields[0], TypeInt, sizeof(unsigned int), 0, list_of_tableColumn_rids[0]});
 	tableInfo.push_back(
-			(ColumnInfo) {tableDescFields[1], TypeVarChar, MAX_SIZE_OF_NAME_IN_DB, list_of_tableColumn_rids[1]});
+			(ColumnInfo) {tableDescFields[1], TypeVarChar, MAX_SIZE_OF_NAME_IN_DB, 0, list_of_tableColumn_rids[1]});
 	tableInfo.push_back(
-			(ColumnInfo) {tableDescFields[2], TypeVarChar, MAX_SIZE_OF_NAME_IN_DB, list_of_tableColumn_rids[2]});
+			(ColumnInfo) {tableDescFields[2], TypeVarChar, MAX_SIZE_OF_NAME_IN_DB, 0, list_of_tableColumn_rids[2]});
 
 	//for fast lookup -> insert <table id, list of column info> for TABLE INTO _catalogColumn
 	_catalogColumn.insert(
@@ -244,21 +254,24 @@ void RelationManager::createCatalog() //NOT TESTED
 
 	//6. insert record about table Columns into Columns =>
 	//		{TABLE_ID=CATALOG_COLUMN_ID, COLUMN_NAME=columnDescFields[#], COLUMN_TYPE=column[#].type, COLUMN_LENGTH=column[#].length}
-	RID list_of_columnColumn_rids[4];
+	RID list_of_columnColumn_rids[5];
 
 	//compose and insert COLUMN records for COLUMNS table
 	if (createRecordInColumns(columnHandle, column, CATALOG_COLUMN_ID,
-			column[0].name.c_str(), column[0].type, column[0].length,
+			column[0].name.c_str(), column[0].type, column[0].length, false,
 			list_of_columnColumn_rids[0]) != 0
 			|| createRecordInColumns(columnHandle, column, CATALOG_COLUMN_ID,
 					column[1].name.c_str(), column[1].type, column[1].length,
-					list_of_columnColumn_rids[1]) != 0
+					false, list_of_columnColumn_rids[1]) != 0
 			|| createRecordInColumns(columnHandle, column, CATALOG_COLUMN_ID,
 					column[2].name.c_str(), column[2].type, column[2].length,
-					list_of_columnColumn_rids[2]) != 0
+					false, list_of_columnColumn_rids[2]) != 0
 			|| createRecordInColumns(columnHandle, column, CATALOG_COLUMN_ID,
 					column[3].name.c_str(), column[3].type, column[3].length,
-					list_of_columnColumn_rids[3]) != 0) {
+					false, list_of_columnColumn_rids[3]) != 0
+			|| createRecordInColumns(columnHandle, column, CATALOG_COLUMN_ID,
+					column[4].name.c_str(), column[4].type, column[4].length,
+					false, list_of_columnColumn_rids[4]) != 0) {
 		//abort
 		cleanup();
 		exit(-1);
@@ -268,13 +281,15 @@ void RelationManager::createCatalog() //NOT TESTED
 	//compose list of column information
 	std::vector<ColumnInfo> columnInfo;
 	columnInfo.push_back(
-			(ColumnInfo) {columnDescFields[0], AttrType(0), sizeof(unsigned int), list_of_columnColumn_rids[0]});
+			(ColumnInfo) {columnDescFields[0], AttrType(0), sizeof(unsigned int), 0, list_of_columnColumn_rids[0]});
 	columnInfo.push_back(
-			(ColumnInfo) {columnDescFields[1], AttrType(2), MAX_SIZE_OF_NAME_IN_DB, list_of_columnColumn_rids[1]});
+			(ColumnInfo) {columnDescFields[1], AttrType(2), MAX_SIZE_OF_NAME_IN_DB, 0, list_of_columnColumn_rids[1]});
 	columnInfo.push_back(
-			(ColumnInfo) {columnDescFields[2], AttrType(0), sizeof(unsigned int), list_of_columnColumn_rids[2]});
+			(ColumnInfo) {columnDescFields[2], AttrType(0), sizeof(unsigned int), 0, list_of_columnColumn_rids[2]});
 	columnInfo.push_back(
-			(ColumnInfo) {columnDescFields[3], AttrType(0), sizeof(unsigned int), list_of_columnColumn_rids[3]});
+			(ColumnInfo) {columnDescFields[3], AttrType(0), sizeof(unsigned int), 0, list_of_columnColumn_rids[3]});
+	columnInfo.push_back(
+			(ColumnInfo) {columnDescFields[4], AttrType(0), sizeof(unsigned int), 0, list_of_columnColumn_rids[4]});
 
 	//for fast lookup -> insert <table id, list of column info> for TABLE INTO _catalogColumn
 	_catalogColumn.insert(
@@ -450,6 +465,12 @@ void RelationManager::processColumnRecordAndInsertIntoMap(const void* buffer,
 	//get integer that represents column-length
 	unsigned int column_length = *((unsigned int*) data);
 
+	//update data pointer
+	data += sizeof(unsigned int);
+
+	//get integer that represents column-status
+	unsigned int column_status = *((unsigned int*) data);
+
 	//iterator that points at the key-value pair of interest
 	std::map<int, std::vector<ColumnInfo> >::iterator iterator =
 			_catalogColumn.find(table_id);
@@ -464,12 +485,12 @@ void RelationManager::processColumnRecordAndInsertIntoMap(const void* buffer,
 
 	//insert record elements inside _catalogTable
 	ColumnInfo info(str_column_name, (AttrType) column_type, column_length,
-			rid);
+			column_status, rid);
 	(*iterator).second.push_back(info);
 
 }
 
-RelationManager::RelationManager() //NOT TESTED
+RelationManager::RelationManager()
 {
 	_rbfm = RecordBasedFileManager::instance();
 
@@ -517,7 +538,7 @@ RelationManager::RelationManager() //NOT TESTED
 		//create list of attributes for table Columns
 		std::vector<Attribute> column;
 		const char* columnDescFields[] = { "table-id", "column-name",
-				"column-type", "column-length" };
+				"column-type", "column-length", "column-status" };
 		column.push_back(
 				(Attribute) {columnDescFields[0], AttrType(0), sizeof(unsigned int)});
 		column.push_back(
@@ -526,6 +547,8 @@ RelationManager::RelationManager() //NOT TESTED
 				(Attribute) {columnDescFields[2], AttrType(0), sizeof(unsigned int)});
 		column.push_back(
 				(Attribute) {columnDescFields[3], AttrType(0), sizeof(unsigned int)});
+		column.push_back(
+				(Attribute) {columnDescFields[4], AttrType(0), sizeof(unsigned int)});
 
 		insertElementsFromTableIntoMap(catalogOfColumns, column);
 
@@ -548,6 +571,13 @@ RelationManager::RelationManager() //NOT TESTED
 	_nextTableId = (
 			CATALOG_COLUMN_ID > CATALOG_TABLE_ID ?
 					CATALOG_COLUMN_ID : CATALOG_TABLE_ID) + 1;
+
+	//debugging
+	std::cout << "Tables:" << endl;
+	printTable(CATALOG_TABLE_NAME);
+	std::cout << "\nColumns:" << endl;
+	printTable(CATALOG_COLUMN_NAME);
+	std::cout << endl;
 }
 
 RC RelationManager::printTable(const string& tableName) {
@@ -659,7 +689,6 @@ RC RelationManager::printTable(const string& tableName) {
 }
 
 RelationManager::~RelationManager() {
-	//not sure
 }
 
 bool RelationManager::isTableExisiting(const std::string& tableName) {
@@ -770,7 +799,7 @@ RC RelationManager::createTable(const string &tableName,
 
 		//create record in table Columns
 		if ((errCode = createRecordInColumns(columnHandle, desc, id,
-				(*i).name.c_str(), (*i).type, (*i).length, columnRid)) != 0) {
+				(*i).name.c_str(), (*i).type, (*i).length, false, columnRid)) != 0) {
 			//fail
 			_rbfm->destroyFile(tableName);
 			_rbfm->closeFile(columnHandle);
@@ -779,7 +808,7 @@ RC RelationManager::createTable(const string &tableName,
 
 		//create column information entry
 		tableInfo.push_back(
-				(ColumnInfo) {(*i).name, (*i).type, (*i).length, columnRid});
+				(ColumnInfo) {(*i).name, (*i).type, (*i).length, 0, columnRid});
 	}
 
 	//close column handle
@@ -805,6 +834,12 @@ RC RelationManager::deleteTable(const string &tableName) {
 	if (tableName.size() == 0) {
 		//fail
 		return -29; //wrong table arguments
+	}
+
+	if( tableName == CATALOG_COLUMN_NAME || tableName == CATALOG_TABLE_NAME )
+	{
+		//cannot delete catalog
+		return -34;
 	}
 
 	//check if table exists
@@ -867,7 +902,7 @@ RC RelationManager::deleteTable(const string &tableName) {
 }
 
 RC RelationManager::getAttributes(const string &tableName,
-		vector<Attribute> &attrs) //NOT TESTED
+		vector<Attribute> &attrs)
 		{
 	RC errCode = 0;
 	if (tableName.empty())
@@ -909,7 +944,7 @@ RC RelationManager::getAttributes(const string &tableName,
 		Attribute attr;
 		attr.name = column._name;
 		attr.type = column._type;
-		attr.length = column._length;
+		attr.length = (column._isDropped == 0 ? column._length : 0);
 		attrs.push_back(attr);
 
 	}
@@ -926,7 +961,7 @@ RC RelationManager::insertTuple(const string &tableName, const void *data,
 	RC errCode = 0;
 
 	//check if there is inconsistent data
-	if (tableName.empty() || data == NULL || rid.pageNum == 0)
+	if (tableName.empty() || data == NULL)
 		return -29;
 
 	vector<Attribute> attrs;
@@ -943,9 +978,15 @@ RC RelationManager::insertTuple(const string &tableName, const void *data,
 
 	//insert the record
 	if ((errCode = _rbfm->insertRecord(fileHandle, attrs, data, rid)) != 0)
-		return errCode;
+	{
+		//close file
+		_rbfm->closeFile(fileHandle);
 
-	_rbfm->closeFile(fileHandle);
+		//return error code
+		return errCode;
+	}
+
+	errCode = _rbfm->closeFile(fileHandle);
 
 	return errCode;
 
@@ -1070,9 +1111,6 @@ RC RelationManager::readTuple(const string &tableName, const RID &rid,
 
 RC RelationManager::readAttribute(const string &tableName, const RID &rid,
 		const string &attributeName, void *data) {
-	//TODO
-	//checking (table name.size != 0, rid != <0,0> AND rid.slot != (unsigned)-1, data != NULL)
-	//simple read attribute with use of RBFM (record description from getAttributes)
 	RC errCode = 0;
 	//check if there is inconsistent data
 	if (tableName.empty() || data == NULL || rid.pageNum == 0)
@@ -1102,9 +1140,6 @@ RC RelationManager::readAttribute(const string &tableName, const RID &rid,
 
 RC RelationManager::reorganizePage(const string &tableName,
 		const unsigned pageNumber) {
-	//TODO
-	//checking (table name.size != 0)
-	//simple reorganize page with use of RBFM (record description from getAttributes)
 	RC errCode = 0;
 	//check if there is inconsistent data
 	if (tableName.empty())
@@ -1198,14 +1233,14 @@ RC RelationManager::scan(const string &tableName,
 	return errCode;
 }
 
-// Extra credit (for later)
+// Extra credit
 RC RelationManager::dropAttribute(const string &tableName,
 		const string &attributeName) {
 	int errCode = 0;
 	//find the tableID from catalog
 	unsigned int tableId;
 	if ((tableId = _catalogTable.find(tableName)->second._id) == 0) //get the table id)
-		return -1; // set error number
+		return -31;	//accessing table that does not exist
 
 	//get columnInfo vector from catalog in memory
 	std::vector<ColumnInfo> columnsInfo = _catalogColumn[tableId];
@@ -1219,17 +1254,69 @@ RC RelationManager::dropAttribute(const string &tableName,
 
 	//if the column does not exist, error
 	if (index == columnsInfo.size())
-		return -1; //set error number
+		return -35; //specified column does not exist
 
-	//delete de attribute on disk
-	if ((errCode = deleteTuple(CATALOG_COLUMN_NAME, columnsInfo[index]._rid))
-			!= 0) {
-		//fail
-		return errCode; //most likely record does not exist
+	//delete the attribute on disk
+	//REASON WHY NOT TO DELETE:
+	//INSTEAD, a record inside the catalog COLUMNS will be marked as deleted with use of one extra field called isDropped
+	//if isDropped = 0 => field exists, if isDropped = 1 => field is deleted!
+	//NO actual deletion takes place, since the information about the deleted item is necessary for accessing records.
+	//Keep in mind that the actual records are not updated, so they contain data in the original way, i.e. with deleted field.
+	//So after attribute is dropped, this field will be by-passed when record is read or written to...
+	//if ((errCode = deleteTuple(CATALOG_COLUMN_NAME, columnsInfo[index]._rid))
+	//		!= 0) {
+	//	//fail
+	//	return errCode; //most likely record does not exist
+	//}
+
+	//instead, declare this attributed to be deleted
+	//allocate buffer for record to be updated inside the column
+	void* dataPtr = malloc(PAGE_SIZE);
+	memset(dataPtr, 0, PAGE_SIZE);
+
+	//first read the column into the dataPtr
+	if((errCode = readTuple(CATALOG_COLUMN_NAME, columnsInfo[index]._rid, dataPtr)) != 0)
+	{
+		//deallocate buffer
+		free(dataPtr);
+		//return error code
+		return errCode;
+	}
+
+	char* recordPtr = (char*)dataPtr;
+	//this is a decoded record, so there is no directory inside it, which means that a manual loop over the fields is required
+	recordPtr += sizeof(unsigned int);
+	recordPtr += *((unsigned int*)recordPtr);
+	recordPtr += 3 * sizeof(unsigned int);
+
+	//has this field has already been dropped
+	if( *((unsigned int*)recordPtr) == 1 || columnsInfo[index]._isDropped == 1 )
+	{
+		//deallocate buffer
+		free(dataPtr);
+
+		//return error code
+		return -36;
+	}
+
+	//change the field <column-status> inside the retrieved record to true, which would mean that the represented column is dropped
+	*((unsigned int*)recordPtr) = 1;
+
+	//update record
+	if((errCode = updateTuple(CATALOG_COLUMN_NAME, dataPtr, columnsInfo[index]._rid)) != 0)
+	{
+		//free buffer
+		free(dataPtr);
+		//return error code
+		return errCode;
 	}
 
 	//finally delete the attribute from catalog in memory
-	columnsInfo.erase(columnsInfo.begin() + index);
+	//similar argument applies here!!! (for reason see above => "REASON WHY NOT TO DELETE")
+	//columnsInfo.erase(columnsInfo.begin() + index);
+
+	//instead reset the isDropped to 1 inside map column catalog
+	_catalogColumn[tableId][index]._isDropped = 1;
 
 	return errCode;
 }
@@ -1258,19 +1345,30 @@ RC RelationManager::addAttribute(const string &tableName,
 		exit(-1);
 	}
 
-	std::vector<Attribute> descriptor;
-	descriptor.push_back(attr);
+	//setup the descriptor for Columns (my bad, not exactly the smartest parameter for the function that inserts record into table Columns...)
+	std::vector<Attribute> column;
+	const char* columnDescFields[] = { "table-id", "column-name", "column-type",
+			"column-length", "column-status" };
+	column.push_back(
+			(Attribute) {columnDescFields[0], AttrType(0), sizeof(unsigned int)});
+	column.push_back(
+			(Attribute) {columnDescFields[1], AttrType(2), MAX_SIZE_OF_NAME_IN_DB});
+	column.push_back(
+			(Attribute) {columnDescFields[2], AttrType(0), sizeof(unsigned int)});
+	column.push_back(
+			(Attribute) {columnDescFields[3], AttrType(0), sizeof(unsigned int)});
+	column.push_back(
+			(Attribute) {columnDescFields[4], AttrType(0), sizeof(unsigned int)});
+
 	RID ridColumn;
 	//add the new attribute on catalog in disk
-	if ((errCode = createRecordInColumns(columnHandle, descriptor, tableId,
-			attr.name.c_str(), attr.type, attr.length, ridColumn)) != 0)
+	if ((errCode = createRecordInColumns(columnHandle, column, tableId,
+			attr.name.c_str(), attr.type, attr.length, false, ridColumn)) != 0)
 		return errCode; // set error number
 
 	//add the new attribute to catalog column in memory
-	std::vector<ColumnInfo> columnsInfo = _catalogColumn[tableId];
-
-	columnsInfo.push_back(
-			(ColumnInfo) {attr.name.c_str(), attr.type, attr.length, ridColumn});
+	_catalogColumn[tableId].push_back(
+			(ColumnInfo) {attr.name.c_str(), attr.type, attr.length, 0, ridColumn});
 
 	if ((errCode = _rbfm->closeFile(columnHandle)) != 0)
 		return errCode; // set error number

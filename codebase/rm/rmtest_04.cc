@@ -12,10 +12,14 @@ void TEST_RM_4(const string &tableName, const int nameLength, const string &name
     void *tuple = malloc(100);
     void *returnedData = malloc(100);
     
+    rm->printTable(tableName);
+
     // Test Insert Tuple 
     prepareTuple(nameLength, name, age, height, salary, tuple, &tupleSize);
     RC rc = rm->insertTuple(tableName, tuple, rid);
     assert(rc == success);
+
+    rm->printTable(tableName);
 
     // Test Read Attribute
     rc = rm->readAttribute(tableName, rid, "Salary", returnedData);

@@ -95,7 +95,7 @@ public:
 
   //create record inside table of Columns
   RC createRecordInColumns(FileHandle& columnHandle, const std::vector<Attribute>& desc, unsigned int tableId, const char * columnName,
-		  AttrType columnType, unsigned int columnLength, RID& rid);
+		  AttrType columnType, unsigned int columnLength, bool isDropped, RID& rid);
 
   //check whether table with the given name exists
   bool isTableExisiting(const std::string& tableName);
@@ -162,6 +162,8 @@ struct ColumnInfo
 
 	unsigned int _length;
 
+	unsigned int _isDropped;	//1 = (true) field (i.e. column) is dropped; 0 = (false) the field is not dropped
+
 	RID _rid;
 
 	ColumnInfo()
@@ -171,9 +173,10 @@ struct ColumnInfo
 		_length = 0;
 		_rid.pageNum = 0;
 		_rid.slotNum = 0;
+		_isDropped = 0;
 	}
-	ColumnInfo(const std::string& name, const AttrType& type, unsigned int length, const RID& rid)
-	: _name(name), _type(type), _length(length)
+	ColumnInfo(const std::string& name, const AttrType& type, unsigned int length, bool isDropped, const RID& rid)
+	: _name(name), _type(type), _length(length), _isDropped(isDropped ? 1 : 0)
 	{
 		_rid.pageNum = rid.pageNum;
 		_rid.slotNum = rid.slotNum;
@@ -181,8 +184,8 @@ struct ColumnInfo
 };
 
 //constants used to identify file names for two system tables - table and column
-#define CATALOG_TABLE_NAME "table"
-#define CATALOG_COLUMN_NAME "column"
+#define CATALOG_TABLE_NAME "Tables"
+#define CATALOG_COLUMN_NAME "Columns"
 
 //table IDs for the table and column
 #define CATALOG_TABLE_ID 1
