@@ -947,6 +947,12 @@ RC RecordBasedFileManager::deleteRecords(FileHandle &fileHandle)
 	while(pagenum < maxpagenum)
 	{
 
+		//set number of pages to be equal to 1
+		if( pagenum == 0 )
+		{
+			((Header*)dataPage)->_totFileSize = 1;
+		}
+
 		if( (errCode = fileHandle.writePage(pagenum, dataPage)) != 0 )
 		{
 			//free data page
@@ -963,6 +969,9 @@ RC RecordBasedFileManager::deleteRecords(FileHandle &fileHandle)
 
 	//free data page
 	free(dataPage);
+
+	//set the meta info
+	fileHandle._info->_numPages = 1;
 
 	//return success
 	return errCode;
@@ -1665,7 +1674,7 @@ RC RecordBasedFileManager::reorganizeFile(FileHandle &fileHandle, const vector<A
 	memset(encData, 0, PAGE_SIZE);
 
 	//allocate buffer for decoded data
-	void* decodedData = malloc(PAGE_SIZE);
+	//void* decodedData = malloc(PAGE_SIZE);
 
 	//create map for storing actual rids for those cases when records are tombStones
 	std::map<RID, RID> tombStoneRids;
@@ -1703,15 +1712,15 @@ RC RecordBasedFileManager::reorganizeFile(FileHandle &fileHandle, const vector<A
 		else
 		{
 			//due to the fact that record is encoded and insertRecord expects the data to be decoded, we have to first decode data that we want to insert
-			unsigned int szOfDecodedData = 0;
-			decodeRecord(recordDescriptor, encData, szOfDecodedData, decodedData);
+			//unsigned int szOfDecodedData = 0;
+			//decodeRecord(recordDescriptor, encData, szOfDecodedData, decodedData);
 
 			//otherwise, insert this record
-			if( (errCode = insertRecord(tempFileHandle, recordDescriptor, decodedData, itRid)) != 0 )
+			if( (errCode = insertRecord(tempFileHandle, recordDescriptor, /*decodedData*/encData, itRid)) != 0 )
 			{
 				//free buffer used for encoded and decoded data
 				free(encData);
-				free(decodedData);
+				//free(decodedData);
 
 				//return error code
 				return errCode;
@@ -1732,21 +1741,21 @@ RC RecordBasedFileManager::reorganizeFile(FileHandle &fileHandle, const vector<A
 	//bring back all records to the original file
 	for(unsigned int i = 0; i < rids.size(); i++)
 	{
-		memset(decodedData, 0, PAGE_SIZE);
-		if((errCode=readRecord(tempFileHandle, recordDescriptor, rids[i], decodedData)) != 0)
+		memset(/*decodedData*/encData, 0, PAGE_SIZE);
+		if((errCode=readRecord(tempFileHandle, recordDescriptor, rids[i], /*decodedData*/encData)) != 0)
 		{
 			//free buffers used for encoded and decoded data
 			free(encData);
-			free(decodedData);
+			//free(decodedData);
 
 			//return error code
 			return errCode;
 		}
-		if((errCode=insertRecord(fileHandle, recordDescriptor, decodedData, itRid)) != 0)
+		if((errCode=insertRecord(fileHandle, recordDescriptor, /*decodedData*/encData, itRid)) != 0)
 		{
 			//free buffers used for encoded and decoded data
 			free(encData);
-			free(decodedData);
+			//free(decodedData);
 
 			//return error code
 			return errCode;
@@ -1758,7 +1767,7 @@ RC RecordBasedFileManager::reorganizeFile(FileHandle &fileHandle, const vector<A
 	{
 		//free buffers used for encoded and decoded data
 		free(encData);
-		free(decodedData);
+		//free(decodedData);
 
 		//return error code
 		return errCode;
@@ -1767,7 +1776,7 @@ RC RecordBasedFileManager::reorganizeFile(FileHandle &fileHandle, const vector<A
 	{
 		//free buffers used for encoded and decoded data
 		free(encData);
-		free(decodedData);
+		//free(decodedData);
 
 		//return error code
 		return errCode;
@@ -1775,7 +1784,7 @@ RC RecordBasedFileManager::reorganizeFile(FileHandle &fileHandle, const vector<A
 
 	//free buffers used for encoded and decoded data
 	free(encData);
-	free(decodedData);
+	//free(decodedData);
 
 	return errCode;
 

@@ -573,10 +573,10 @@ RelationManager::RelationManager()
 					CATALOG_COLUMN_ID : CATALOG_TABLE_ID) + 1;
 
 	//debugging
-	std::cout << "Tables:" << endl;
-	printTable(CATALOG_TABLE_NAME);
-	std::cout << "\nColumns:" << endl;
-	printTable(CATALOG_COLUMN_NAME);
+	//std::cout << "Tables:" << endl;
+	//printTable(CATALOG_TABLE_NAME);
+	//std::cout << "\nColumns:" << endl;
+	//printTable(CATALOG_COLUMN_NAME);
 	std::cout << endl;
 }
 
@@ -637,7 +637,7 @@ RC RelationManager::printTable(const string& tableName) {
 		//fail
 		_rbfm->closeFile(tableHandle);
 		free(data);
-		return -1;
+		exit(-1);
 	}
 
 	//get table id
@@ -950,7 +950,7 @@ RC RelationManager::getAttributes(const string &tableName,
 	}
 
 	free(recordData);
-	_rbfm->closeFile(fileHandle);
+	errCode = _rbfm->closeFile(fileHandle);
 
 	return errCode;
 }
@@ -1045,7 +1045,10 @@ RC RelationManager::deleteTuple(const string &tableName, const RID &rid) {
 
 	//delete the record
 	if ((errCode = _rbfm->deleteRecord(fileHandle, attrs, rid)) != 0)
+	{
+		_rbfm->closeFile(fileHandle);
 		return errCode;
+	}
 
 	_rbfm->closeFile(fileHandle);
 
@@ -1073,9 +1076,12 @@ RC RelationManager::updateTuple(const string &tableName, const void *data,
 
 	//update the record
 	if ((errCode = _rbfm->updateRecord(fileHandle, attrs, data, rid)) != 0)
+	{
+		_rbfm->closeFile(fileHandle);
 		return errCode;
+	}
 
-	_rbfm->closeFile(fileHandle);
+	errCode = _rbfm->closeFile(fileHandle);
 
 	return errCode;
 }
@@ -1101,7 +1107,10 @@ RC RelationManager::readTuple(const string &tableName, const RID &rid,
 
 	//read the tuple
 	if ((errCode = _rbfm->readRecord(fileHandle, attrs, rid, data)) != 0)
+	{
+		_rbfm->closeFile(fileHandle);
 		return errCode;
+	}
 
 	if ((errCode = _rbfm->closeFile(fileHandle)) != 0)
 		return errCode;
@@ -1131,7 +1140,10 @@ RC RelationManager::readAttribute(const string &tableName, const RID &rid,
 	//read attribute
 	if ((errCode = _rbfm->readAttribute(fileHandle, attrs, rid, attributeName,
 			data)) != 0)
+	{
+		_rbfm->closeFile(fileHandle);
 		return errCode;
+	}
 
 	_rbfm->closeFile(fileHandle);
 
@@ -1222,6 +1234,7 @@ RC RelationManager::scan(const string &tableName,
 	//get the attributes for this table
 	if ((errCode = getAttributes(tableName, attrs)) != 0) {
 		//fail
+		_rbfm->closeFile(fileHandle);
 		return errCode;
 	}
 
@@ -1364,7 +1377,10 @@ RC RelationManager::addAttribute(const string &tableName,
 	//add the new attribute on catalog in disk
 	if ((errCode = createRecordInColumns(columnHandle, column, tableId,
 			attr.name.c_str(), attr.type, attr.length, false, ridColumn)) != 0)
+	{
+		_rbfm->closeFile(columnHandle);
 		return errCode; // set error number
+	}
 
 	//add the new attribute to catalog column in memory
 	_catalogColumn[tableId].push_back(
@@ -1383,18 +1399,20 @@ RC RelationManager::reorganizeTable(const string &tableName) {
 	FileHandle tableHandle;
 	vector<Attribute> attrs;
 
-	if ((errCode = _rbfm->openFile(CATALOG_TABLE_NAME, tableHandle)) != 0) {
+	if ((errCode = _rbfm->openFile(tableName, tableHandle)) != 0) {
 		//abort
 		return errCode;
 	}
 
 	if ((errCode = getAttributes(tableName, attrs)) != 0) {
 		//abort
+		_rbfm->closeFile(tableHandle);
 		return errCode;
 	}
 
 	if ((errCode = _rbfm->reorganizeFile(tableHandle, attrs)) != 0) {
 		//abort
+		_rbfm->closeFile(tableHandle);
 		return errCode;
 	}
 
