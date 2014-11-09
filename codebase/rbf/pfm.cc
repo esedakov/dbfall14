@@ -97,6 +97,268 @@ RC PagedFileManager::createFile(const char *fileName)
 	return 0;
 }
 
+RC PagedFileManager::createFileHeader(const char * fileName, unsigned int numOfInitialPages)
+{
+	/*
+	 * create a header a page:
+	 * I use a page directory method, which implies usage of "linked list" of page headers.
+	 * The content of header page is as follows:
+	 *   + nextHeaderPageId:PageNum
+	 *   + numUsedPageIds:PageNum (i.e. unsigned integer)
+	 *   + array of <pageIds:(unsigned integer), numFreeBytes:{unsigned integer}> for the rest of header page => (unsigned integer)[PAGE_SIZE - 2*SIZEOF(pageNum)]
+	**/
+	RC errCode = 0;
+
+	//open file
+	FileHandle fileHandle;
+	errCode = openFile(fileName, fileHandle);
+	if(errCode != 0)
+	{
+		return errCode;
+	}
+
+	//create a header
+	Header header;
+
+	int i = 0;
+	while(i < numOfInitialPages)
+	{
+		//set all header fields to 0
+		memset(&header, 0, sizeof(Header));
+
+		//set number of pages
+		if( i == 0 )
+		{
+			header._totFileSize = numOfInitialPages;
+			fileHandle._info->_numPages = numOfInitialPages;
+		}
+
+		//insert page header into the file
+		fileHandle.appendPage(&header);
+
+		//write back that this file has number of pages = 1
+		fileHandle.writeBackNumOfPages();
+
+		//update counter <i>
+		i++;
+	}
+	//close file
+	errCode = closeFile(fileHandle);
+	if(errCode != 0)
+	{
+		return errCode;
+	}
+
+	//success
+	return errCode;
+}
+
+RC PagedFileManager::findHeaderPage(FileHandle fileHandle, PageNum pageId, PageNum& retHeaderPage)
+{
+	RC errCode = 0;
+
+	//counters for current header IDs to loop thru
+	PageNum headerPageId = 0;
+
+	//pointer to the header page
+	Header* hPage = NULL;
+
+	//allocate temporary buffer for page
+	void* data = malloc(PAGE_SIZE);
+
+	//loop thru header pages
+	do
+	{
+		//get the first header page
+		if( (errCode = fileHandle.readPage((PageNum)headerPageId, data)) != 0 )
+		{
+			//deallocate data
+			free(data);
+
+			//return error
+			return errCode;
+		}
+
+		//cast data to Header
+		hPage = (Header*)data;
+
+		if( pageId <= hPage->_numUsedPageIds )	//NumUsedPageIds counts only the data pages used within this header
+												//data pages start from 1 and go up
+												//pageId is not necessarily equal to page number (i.e. for header pages > 0, it is a module of page number and num_of_page_ids, so it varies between [1, num_page_ids))
+												//for this reason, the comparison between pageId and and numUsedPageIds is inclusive
+		{
+			//assign a found page id
+			retHeaderPage = headerPageId;
+
+			//free temporary buffer for header page
+			free(data);
+
+			//return success
+			return errCode;
+		}
+
+		pageId -= NUM_OF_PAGE_IDS;
+
+		//go to next header page
+		headerPageId = hPage->_nextHeaderPageId;
+
+	} while(headerPageId > 0);
+
+	//deallocate temporary buffer for header page
+	free(data);
+
+	//return error
+	return -16;
+}
+
+RC PagedFileManager::getDataPage(FileHandle &fileHandle, const unsigned int recordSize, PageNum& pageNum, PageNum& headerPage, unsigned int& freeSpaceLeftInPage)
+{
+	RC errCode = 0;
+
+	//maintain current header page id and its former value (from past iteration)
+	unsigned int headerPageId = 0, lastHeaderPageId = 0;
+
+	//keep array of bytes of size of page for reading in page data
+	void* data = malloc(PAGE_SIZE);
+
+	//casted data to header page
+	Header* hPage = NULL;
+
+	//loop thru header pages
+	do
+	{
+		//get the first header page
+		if( (errCode = fileHandle.readPage((PageNum)headerPageId, data)) != 0 )
+		{
+			//deallocate data
+			free(data);
+
+			//return error
+			return errCode;
+		}
+
+		//cast data to Header
+		hPage = (Header*)data;
+
+		//get the id of the next header page
+		lastHeaderPageId = headerPageId;
+		headerPageId = hPage->_nextHeaderPageId;
+
+		//loop thru page entries of the current header page
+		for( unsigned int i = 0; i < hPage->_numUsedPageIds; i++ )
+		{
+			//get the current data page information
+			PageInfo* pi = &(hPage->_arrOfPageIds[i]);
+
+			//if it has the proper number of free bytes than return information about this page
+			if( pi->_numFreeBytes >= recordSize + sizeof(PageDirSlot) )	//inconsistency found: if amount of free space left in page and requested size are exactly equal than it would skip this candidate page and allocate a new data page, so I changed '>' to '>='
+			{
+				//assign id
+				pageNum = pi->_pageid;
+
+				//update free space left
+				pi->_numFreeBytes -= recordSize + sizeof(PageDirSlot);
+
+				freeSpaceLeftInPage = pi->_numFreeBytes;
+
+				//assign a header page
+				headerPage = lastHeaderPageId;
+
+				//write header page
+				fileHandle.writePage(headerPage, data);
+
+				//deallocate data
+				free(data);
+
+				//return success
+				return 0;
+			}
+		}
+
+	} while(headerPageId > 0);
+
+	//assign a header page id
+	headerPage = lastHeaderPageId;
+
+	//check if last processed header page can NOT fit a meta-data for new record
+	if( hPage->_numUsedPageIds >= NUM_OF_PAGE_IDS )
+	{
+		//this header page is full, need to create new header page
+		//assign a new header page id
+		PageNum nextPageId = fileHandle.getNumberOfPages();
+
+		//assign a next header page
+		hPage->_nextHeaderPageId = nextPageId;
+
+		//save header page
+		fileHandle.writePage(headerPage, data);
+
+		headerPage = nextPageId;
+
+		//prepare parameters for header page allocation
+		memset(data, 0, PAGE_SIZE);
+
+		//append new header page
+		if( (errCode = fileHandle.appendPage(data)) != 0 )
+		{
+			//deallocate data
+			free(data);
+
+			//return error code
+			return errCode;
+		}
+
+		//later all fields of header page are accessed by dereferencing to Header structure
+		hPage = (Header*)data;
+	}
+
+	//need to allocate new data page, because all available data pages do not have enough of free space
+	//prepare parameters for data page allocation
+	void* dataPage = malloc(PAGE_SIZE);
+	memset((void*)dataPage, 0, PAGE_SIZE);
+
+	//allocate a new data page
+	if( (errCode = fileHandle.appendPage(dataPage)) != 0 )
+	{
+		//deallocate data and dataPaga
+		free(data);
+		free(dataPage);
+
+		//if failed, return error code
+		return errCode;
+	}
+
+	//get page id of this newly added page
+	PageNum dataPageId = fileHandle.getNumberOfPages() - 1;	//page indexes are off by extra 1, header page is '0' and first data page is '1'!
+
+	//set the new record
+	hPage->_arrOfPageIds[hPage->_numUsedPageIds]._pageid = dataPageId;
+	if( hPage->_arrOfPageIds[hPage->_numUsedPageIds]._numFreeBytes == 0 )
+		hPage->_arrOfPageIds[hPage->_numUsedPageIds]._numFreeBytes = PAGE_SIZE - 2 * sizeof(unsigned int);
+	hPage->_arrOfPageIds[hPage->_numUsedPageIds]._numFreeBytes -= recordSize + sizeof(PageDirSlot);
+
+	freeSpaceLeftInPage = hPage->_arrOfPageIds[hPage->_numUsedPageIds]._numFreeBytes;
+
+	//assign data page id
+	pageNum = dataPageId;
+
+	//increment number of page IDs used in this page
+	hPage->_numUsedPageIds++;
+
+	//write header page
+	fileHandle.writePage(headerPage, data);
+
+	//write data page
+	fileHandle.writePage(dataPageId, dataPage);
+
+	//deallocate data(s)
+	free(data);
+	free(dataPage);
+
+	//return success, because technically no error occurred
+	return 0;
+}
+
 int PagedFileManager::countNumberOfOpenedInstances(const char* fileName)
 {
 	//check for illegal file name
@@ -261,10 +523,20 @@ RC PagedFileManager::closeFile(FileHandle &fileHandle)
 
 
 FileHandle::FileHandle()
-: _info(NULL), _filePtr(NULL)
+: _info(NULL), _filePtr(NULL), readPageCounter(0), writePageCounter(0), appendPageCounter(0)
 {
 }
 
+RC FileHandle::collectCounterValues(unsigned &readPageCount, unsigned &writePageCount, unsigned &appendPageCount)
+{
+	RC errCode = 0;
+
+	readPageCount = this->readPageCounter;
+	writePageCount = this->writePageCounter;
+	appendPageCount = this->appendPageCounter;
+
+	return errCode;
+}
 
 FileHandle::~FileHandle()
 {
@@ -306,8 +578,14 @@ RC FileHandle::readPage(PageNum pageNum, void *data)
     //attempt to read PAGE_SIZE bytes
     size_t numBytes = fread(data, 1, PAGE_SIZE, _filePtr);
 
-    //check that number of bytes read is greater than 0
-    return (numBytes > 0) ? 0 : -13;
+    if( numBytes == 0 )
+    	return -13;
+
+    //update counter
+    readPageCounter = readPageCounter + 1;
+
+    //success
+    return 0;
 }
 
 
@@ -341,8 +619,14 @@ RC FileHandle::writePage(PageNum pageNum, const void *data)
 	//attempt to write PAGE_SIZE bytes
 	size_t numBytes = fwrite(data, 1, PAGE_SIZE, _filePtr);
 
-	//check that number of bytes written is greater equal to page size
-	return (numBytes == PAGE_SIZE) ? 0 : -13;
+	if( numBytes != PAGE_SIZE )
+		return -13;
+
+	//update counter
+	writePageCounter = writePageCounter + 1;
+
+	//success
+	return 0;
 }
 
 RC FileHandle::appendPage(const void *data)
@@ -379,7 +663,10 @@ RC FileHandle::appendPage(const void *data)
 	//increment page count
 	_info->_numPages++;
 
-	//success, return 0
+	//update counter
+	appendPageCounter = appendPageCounter + 1;
+
+	//success
 	return 0;
 }
 
@@ -451,6 +738,14 @@ void FileHandle::setAccess(access_flag flag, bool& success)
 
 	//set access
 	((Header*)data)->_access = flag;
+
+	//write back header
+	if( writePage(0, data) != 0 )
+	{
+		success = false;
+		free(data);
+		return;
+	}
 
 	//success
 	success = true;

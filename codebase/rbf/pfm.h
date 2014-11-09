@@ -44,10 +44,13 @@ public:
     bool isExisting(const char *fileName)	const;
 
     RC createFile    (const char *fileName);                         // Create a new file
+    RC createFileHeader(const char* fileName, unsigned int numOfInitialPages);
     RC destroyFile   (const char *fileName);                         // Destroy a file
     int countNumberOfOpenedInstances(const char* fileName);
     RC openFile      (const char *fileName, FileHandle &fileHandle); // Open a file
     RC closeFile     (FileHandle &fileHandle);                       // Close a file
+    RC getDataPage(FileHandle &fileHandle, const unsigned int recordSize, PageNum& pageNum, PageNum& headerPage, unsigned int& freeSpaceLeftInPage);
+    RC findHeaderPage(FileHandle fileHandle, PageNum pageId, PageNum& retHeaderPage);
 
 protected:
     PagedFileManager();                                   // Constructor
@@ -83,6 +86,9 @@ public:
     void setAccess(access_flag flag, bool& success);
     access_flag getAccess(bool& success);
 
+    //new method for project 3
+    RC collectCounterValues(unsigned &readPageCount, unsigned &writePageCount, unsigned &appendPageCount);
+
 public:
     /*
      * pointer to the information entity of the file
@@ -92,6 +98,12 @@ public:
      * pointer to the OS file-handler
     **/
     FILE* _filePtr;
+
+    //new variables for project 3
+    //keep counter for each operation
+	unsigned readPageCounter;
+	unsigned writePageCounter;
+	unsigned appendPageCounter;
  };
 
 
@@ -149,5 +161,23 @@ struct Header
 	**/
 	PageInfo _arrOfPageIds[ NUM_OF_PAGE_IDS ];
 };
+
+//new structure - PageDirSlot. beginning.
+/*
+ * page directory slot that stores offset to the record and its size
+**/
+struct PageDirSlot
+{
+	/*
+	 * offset (in bytes) to the start of record from the start of the data page
+	**/
+	unsigned int _offRecord;
+	/*
+	 * size of record (in bytes)
+	**/
+	unsigned int _szRecord;
+};
+//new structure - PageDirSlot. end.
+
 
  #endif

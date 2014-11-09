@@ -5,7 +5,6 @@
 #include <iostream>
 
 //error codes for project 2, component RM:
-//	-29 = wrong table arguments
 //	-30 = attempt to re-create existing table
 //	-31 = accessing/modifying/deleting table that does not exists
 //	-32 = Table of tables corrupted
@@ -13,6 +12,7 @@
 //	-34 = destructive operation on the catalog
 //	-35 = specified column does not exist
 //	-36 = attempting to drop non-existing OR add existing field inside the record
+//	-37 = wrong table arguments
 
 RelationManager* RelationManager::_rm = 0;
 
@@ -659,7 +659,7 @@ RC RelationManager::printTable(const string& tableName) {
 		//fail
 		_rbfm->closeFile(tableHandle);
 		free(data);
-		return -1;
+		return -32;
 	}
 
 	std::vector<ColumnInfo> vecColInfo = catColumnIter->second;
@@ -701,7 +701,7 @@ RC RelationManager::createTable(const string &tableName,
 
 	//checking the input arguments
 	if (tableName.length() == 0 || attrs.size() == 0) {
-		return -29; //wrong table arguments
+		return -37; //wrong table arguments
 	}
 
 	//make sure that the table does not exist, otherwise fail
@@ -833,7 +833,7 @@ RC RelationManager::deleteTable(const string &tableName) {
 	//checking that input argument makes sense
 	if (tableName.size() == 0) {
 		//fail
-		return -29; //wrong table arguments
+		return -37; //wrong table arguments
 	}
 
 	if( tableName == CATALOG_COLUMN_NAME || tableName == CATALOG_TABLE_NAME )
@@ -906,7 +906,7 @@ RC RelationManager::getAttributes(const string &tableName,
 		{
 	RC errCode = 0;
 	if (tableName.empty())
-		return -29; //tableName no valid
+		return -37; //tableName no valid
 
 	//check if the table exist in the map
 	if (_catalogTable.find(tableName) == _catalogTable.end()) {
@@ -962,7 +962,7 @@ RC RelationManager::insertTuple(const string &tableName, const void *data,
 
 	//check if there is inconsistent data
 	if (tableName.empty() || data == NULL)
-		return -29;
+		return -37;
 
 	vector<Attribute> attrs;
 	//get the attributes for this table
@@ -997,7 +997,7 @@ RC RelationManager::deleteTuples(const string &tableName) {
 
 	//checking that table name is not empty string
 	if (tableName.empty())
-		return -29;
+		return -37;
 
 	FileHandle tableHandle;
 
@@ -1029,7 +1029,7 @@ RC RelationManager::deleteTuple(const string &tableName, const RID &rid) {
 	RC errCode = 0;
 	//check if there is inconsistent data
 	if (tableName.empty() || rid.pageNum == 0)
-		return -29;
+		return -37;
 
 	vector<Attribute> attrs;
 	//get the attributes for this table
@@ -1060,7 +1060,7 @@ RC RelationManager::updateTuple(const string &tableName, const void *data,
 	RC errCode = 0;
 	//check if there is inconsistent data
 	if (tableName.empty() || data == NULL || rid.pageNum == 0)
-		return -29;
+		return -37;
 
 	vector<Attribute> attrs;
 	//get the attributes for this table
@@ -1091,7 +1091,7 @@ RC RelationManager::readTuple(const string &tableName, const RID &rid,
 	RC errCode = 0;
 	//check if there is inconsistent data
 	if (tableName.empty() || data == NULL || rid.pageNum == 0)
-		return -29;
+		return -37;
 
 	vector<Attribute> attrs;
 	//get the attributes for this table
@@ -1123,7 +1123,7 @@ RC RelationManager::readAttribute(const string &tableName, const RID &rid,
 	RC errCode = 0;
 	//check if there is inconsistent data
 	if (tableName.empty() || data == NULL || rid.pageNum == 0)
-		return -29;
+		return -37;
 
 	vector<Attribute> attrs;
 	//get the attributes for this table
@@ -1155,7 +1155,7 @@ RC RelationManager::reorganizePage(const string &tableName,
 	RC errCode = 0;
 	//check if there is inconsistent data
 	if (tableName.empty())
-		return -29;
+		return -37;
 
 	vector<Attribute> attrs;
 	//get the attributes for this table
@@ -1223,7 +1223,7 @@ RC RelationManager::scan(const string &tableName,
 	RC errCode = 0;
 	//check if there is inconsistent data
 	if (tableName.empty())
-		return -29;
+		return -37;
 
 	//create the handle and open the table
 	FileHandle fileHandle;
@@ -1341,7 +1341,7 @@ RC RelationManager::addAttribute(const string &tableName,
 	//find the tableID from catalog
 	unsigned int tableId;
 	if ((tableId = _catalogTable.find(tableName)->second._id) == 0) //get the table id)
-		return -1; // set error number
+		return -32; // set error number
 
 	//open file and set handle
 	FileHandle columnHandle;

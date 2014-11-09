@@ -6,6 +6,8 @@
 
 #include "../rbf/rbfm.h"
 
+#define IX_INITIAL_NUMBER_OF_BUCKETS	256
+
 # define IX_EOF (-1)  // end of the index scan
 
 class IX_ScanIterator;
@@ -85,6 +87,9 @@ class IndexManager {
 
  private:
   static IndexManager *_index_manager;
+  unsigned int* _N;
+  unsigned int* _Level;
+  unsigned int* _Next;
 };
 
 
@@ -105,11 +110,16 @@ public:
 
     IXFileHandle();  							// Constructor
     ~IXFileHandle(); 							// Destructor
+
+    //file handles
+	FileHandle _metaDataFileHandler;
+	FileHandle _bucketDataFileHandler;
     
 private:
     unsigned readPageCounter;
     unsigned writePageCounter;
     unsigned appendPageCounter;
+
 };
 
 // print out the error message for a given return code
