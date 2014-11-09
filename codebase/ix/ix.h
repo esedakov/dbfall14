@@ -6,13 +6,23 @@
 
 #include "../rbf/rbfm.h"
 
-#define IX_INITIAL_NUMBER_OF_BUCKETS	256
-
 # define IX_EOF (-1)  // end of the index scan
 
 class IX_ScanIterator;
 class IXFileHandle;
 
+struct indexInfo
+{
+	unsigned int N;
+	unsigned int Level;
+	unsigned int Next;
+	indexInfo()
+	: N(0), Level(0), Next(0)
+	{};
+	indexInfo(unsigned int n, unsigned int level, unsigned int next)
+	: N(n), Level(level), Next(next)
+	{};
+};
 
 class IndexManager {
  public:
@@ -87,9 +97,7 @@ class IndexManager {
 
  private:
   static IndexManager *_index_manager;
-  unsigned int* _N;
-  unsigned int* _Level;
-  unsigned int* _Next;
+  std::map<std::string, indexInfo> _info;
 };
 
 
@@ -113,7 +121,8 @@ public:
 
     //file handles
 	FileHandle _metaDataFileHandler;
-	FileHandle _bucketDataFileHandler;
+	FileHandle _primBucketDataFileHandler;
+	FileHandle _overBucketDataFileHandler;
     
 private:
     unsigned readPageCounter;

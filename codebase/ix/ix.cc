@@ -1,5 +1,13 @@
 
 #include "ix.h"
+#include <iostream>
+#include <stdlib.h>
+
+/*
+ * error code:
+ * -40 => index map is corrupted
+ * -41 => primary bucket has wrong number of pages
+ */
 
 IndexManager* IndexManager::_index_manager = 0;
 
@@ -12,7 +20,6 @@ IndexManager* IndexManager::instance()
 }
 
 IndexManager::IndexManager()
-: _N(NULL), _Level(NULL), _Next(NULL)
 {
 }
 
@@ -27,14 +34,20 @@ RC IndexManager::createFile(const string &fileName, const unsigned &numberOfPage
 	//for faster function access create a PFM pointer
 	PagedFileManager* _pfm = PagedFileManager::instance();
 
-	//create two files - meta-data file AND bucket-data file
+	//create three files - meta-data file AND two bucket-data file
 	//	the first (meta-data) file will be called <fileName>_meta
-	//	the second (bucket-data) file will be called <fileName>_bucket
-	const char * metaFileName = (fileName + "_meta").c_str(), *bucketFileName = (fileName + "_bucket").c_str();
+	//	the second (primary bucket-data) file will be called <fileName>_prim
+	//	the third (overflow bucket-data) file will be called <fileName>_over
+	const char
+		*metaFileName = (fileName + "_meta").c_str(),
+		*primaryBucketFileName = (fileName + "_prim").c_str(),
+		*overflowBucketFileName = (fileName + "_over").c_str();
 	if( (errCode = _pfm->createFile(metaFileName)) != 0 ||
-		(errCode = _pfm->createFileHeader(metaFileName, 2)) != 0 ||
-		(errCode = _pfm->createFile(bucketFileName)) != 0 ||
-		(errCode = _pfm->createFileHeader(bucketFileName, 1)) != 0 )
+		(errCode = _pfm->createFileHeader(metaFileName)) != 0 ||
+		(errCode = _pfm->createFile(primaryBucketFileName)) != 0 ||
+		(errCode = _pfm->createFileHeader(primaryBucketFileName)) != 0 ||
+		(errCode = _pfm->createFile(overflowBucketFileName)) != 0 ||
+		(errCode = _pfm->createFileHeader(overflowBucketFileName)) != 0 )
 	{
 		//return error code
 		return errCode;
@@ -44,12 +57,13 @@ RC IndexManager::createFile(const string &fileName, const unsigned &numberOfPage
 	void* data = malloc(PAGE_SIZE);
 
 	//initialize N, Level, and Next
-	_N = ((unsigned int*)(data) + 0);
-	*_N = IX_INITIAL_NUMBER_OF_BUCKETS;
-	_Level = ((unsigned int*)(data) + 1);
-	*_Level = 0;
-	_Next = ((unsigned int*)(data) + 2);
-	*_Next = 0;
+	indexInfo info(numberOfPages, 0, 0);
+	*((unsigned int*)(data) + 0) = info.N;
+	*((unsigned int*)(data) + 1) = info.Level;
+	*((unsigned int*)(data) + 2) = info.Next;
+
+	//insert info into map
+	_info.insert(std::pair<std::string, indexInfo>(fileName, info));
 
 	//place these meta-data fields (N, Level, and Next) inside a separate meta-data header (it is
 	//in the second page, given that the PFM header that keeps page directory is located in the first page)
@@ -61,7 +75,7 @@ RC IndexManager::createFile(const string &fileName, const unsigned &numberOfPage
 	}
 
 	//write in a second page that will store meta-data header
-	if( (errCode = handle._metaDataFileHandler.writePage(1, data)) != 0 )
+	if( (errCode = handle._metaDataFileHandler.appendPage(data)) != 0 )
 	{
 		//close file
 		_pfm->closeFile(handle._metaDataFileHandler);
@@ -80,6 +94,38 @@ RC IndexManager::createFile(const string &fileName, const unsigned &numberOfPage
 		return errCode;
 	}
 
+	//open primary bucket file
+	if( (errCode = _pfm->openFile(primaryBucketFileName, handle._primBucketDataFileHandler)) != 0 )
+	{
+		//deallocate buffer
+		free(data);
+		//return error code
+		return errCode;
+	}
+
+	//insert N primary pages
+	for( unsigned int i = 0; i < numberOfPages; i++ )
+	{
+		if( (errCode = handle._primBucketDataFileHandler.appendPage(data)) != 0 )
+		{
+			//deallocate buffer
+			free(data);
+			//close primary bucket file
+			_pfm->closeFile(handle._primBucketDataFileHandler);
+			//return error code
+			return errCode;
+		}
+	}
+
+	//close primary bucket file
+	if( (errCode = _pfm->closeFile(handle._primBucketDataFileHandler)) != 0 )
+	{
+		//deallocate buffer
+		free(data);
+		//return error code
+		return errCode;
+	}
+
 	//free buffer
 	free(data);
 
@@ -87,26 +133,129 @@ RC IndexManager::createFile(const string &fileName, const unsigned &numberOfPage
 	//meta file should have 2 pages:
 	//	1. PFM header with [total size=2][access code=0][next header page=0][number of data pages=1][<page_id=1,number of free bytes=#>]
 	//	2. IX meta header with [N=256][Level=0][Next=0]
-	//bucket file should have 1 page:
+	//primary bucket file should have N+1 pages:
+	//	1. PFM header with [total size=1][access code=0][next header page=0][number of data pages=0]REPEAT_10_TIMES{ [<page_id=#,number_of_free_bytes=#>] }
+	//	2-11. empty pages
+	//overflow bucket file should have 1 page:
 	//	1. PFM header with [total size=1][access code=0][next header page=0][number of data pages=0][NONE]
 
 	//success
 	return errCode;
 }
 
-RC IndexManager::destroyFile(const string &fileName)
+RC IndexManager::destroyFile(const string &fileName)	//NOT TESTED
 {
-	return -1;
+	//delete 3 files - meta-data, primary bucket, overflow bucket files
+	RC errCode = 0;
+
+	std::map<std::string, indexInfo>::iterator it;
+
+	//check if map has the specified file
+	if( (it = _info.find(fileName)) != _info.end() )
+	{
+		//since index map has this file, delete it
+		_info.erase(it);
+	}
+
+	//for faster function access create a PFM pointer
+	PagedFileManager* _pfm = PagedFileManager::instance();
+
+	if( (errCode = _pfm->destroyFile( (fileName + "_meta").c_str() )) != 0 ||
+		(errCode = _pfm->destroyFile( (fileName + "_prim").c_str() )) != 0 ||
+		(errCode = _pfm->destroyFile( (fileName + "_over").c_str() )) != 0 )
+	{
+		//return error code
+		return errCode;
+	}
+
+	//success
+	return errCode;
 }
 
-RC IndexManager::openFile(const string &fileName, IXFileHandle &ixFileHandle)
+RC IndexManager::openFile(const string &fileName, IXFileHandle &ixFileHandle)	//NOT TESTED
 {
-	return -1;
+	RC errCode = 0;
+
+	//for faster function access create a PFM pointer
+	PagedFileManager* _pfm = PagedFileManager::instance();
+
+	//open meta-data, primary-bucket, and overflow-bucket files
+	if( (errCode = _pfm->openFile( (fileName + "_meta").c_str(), ixFileHandle._metaDataFileHandler )) != 0 ||
+		(errCode = _pfm->openFile( (fileName + "_prim").c_str(), ixFileHandle._primBucketDataFileHandler )) != 0 ||
+		(errCode = _pfm->openFile( (fileName + "_over").c_str(), ixFileHandle._overBucketDataFileHandler )) != 0 )
+	{
+		//return error code
+		return errCode;
+	}
+
+	//read meta information into map which is located at the ix-header (second page) of the meta-data file
+	void* data = malloc(PAGE_SIZE);
+
+	//read page
+	if( (errCode = ixFileHandle._metaDataFileHandler.readPage(1, data)) != 0 )
+	{
+		//deallocate buffer
+		free(data);
+		//return error code
+		return errCode;
+	}
+
+	std::map<std::string, indexInfo>::iterator it;
+
+	//check if the entry exists inside the map with this file name
+	if( (it = _info.find(fileName)) == _info.end() )
+	{
+		//insert a new entry
+		std::pair<std::map<std::string, indexInfo>::iterator, bool> resultOfInsertion =
+				_info.insert(std::pair<std::string, indexInfo>(fileName, indexInfo()));
+
+		if( resultOfInsertion.second == false )
+		{
+			//deallocate buffer
+			free(data);
+			//return error code
+			return -40;	//index map is corrupted
+		}
+
+		it = resultOfInsertion.first;
+	}
+
+	//assign index attributes
+	it->second.N = *( ((unsigned int*)data) + 0 );
+	it->second.Level = *( ((unsigned int*)data) + 1 );
+	it->second.Next = *( ((unsigned int*)data) + 2 );
+
+	//make sure that primary-bucket file has N+1 pages
+	if( ixFileHandle._primBucketDataFileHandler.getNumberOfPages() != it->second.N )
+	{
+		return -41;	//primary bucket has wrong number of pages
+	}
+
+	//deallocate buffer
+	free(data);
+
+	//success
+	return errCode;
 }
 
-RC IndexManager::closeFile(IXFileHandle &ixfileHandle)
+RC IndexManager::closeFile(IXFileHandle &ixfileHandle)	//NOT TESTED
 {
-	return -1;
+	RC errCode = 0;
+
+	//for faster function access create a PFM pointer
+	PagedFileManager* _pfm = PagedFileManager::instance();
+
+	//close all file handlers
+	if( (errCode = _pfm->closeFile(ixfileHandle._metaDataFileHandler)) != 0 ||
+		(errCode = _pfm->closeFile(ixfileHandle._primBucketDataFileHandler)) != 0 ||
+		(errCode = _pfm->closeFile(ixfileHandle._overBucketDataFileHandler)) != 0 )
+	{
+		//return error code
+		return errCode;
+	}
+
+	//success
+	return errCode;
 }
 
 RC IndexManager::insertEntry(IXFileHandle &ixfileHandle, const Attribute &attribute, const void *key, const RID &rid)
@@ -129,14 +278,26 @@ RC IndexManager::printIndexEntriesInAPage(IXFileHandle &ixfileHandle, const unsi
 	return -1;
 }
 
-RC IndexManager::getNumberOfPrimaryPages(IXFileHandle &ixfileHandle, unsigned &numberOfPrimaryPages) 
+RC IndexManager::getNumberOfPrimaryPages(IXFileHandle &ixfileHandle, unsigned &numberOfPrimaryPages) 	//NOT TESTED
 {
-	return -1;
+	RC errCode = 0;
+
+	numberOfPrimaryPages = ixfileHandle._primBucketDataFileHandler.getNumberOfPages() - 1;
+
+	//success
+	return errCode;
 }
 
-RC IndexManager::getNumberOfAllPages(IXFileHandle &ixfileHandle, unsigned &numberOfAllPages) 
+RC IndexManager::getNumberOfAllPages(IXFileHandle &ixfileHandle, unsigned &numberOfAllPages) 	//NOT TESTED
 {
-	return -1;
+	RC errCode = 0;
+
+	numberOfAllPages = ixfileHandle._primBucketDataFileHandler.getNumberOfPages() +
+			           ixfileHandle._metaDataFileHandler.getNumberOfPages() +
+			           ixfileHandle._overBucketDataFileHandler.getNumberOfPages();
+
+	//success
+	return errCode;
 }
 
 
@@ -171,7 +332,7 @@ RC IX_ScanIterator::close()
 
 
 IXFileHandle::IXFileHandle()
-: appendPageCounter(0), writePageCounter(0), appendPageCounter(0)
+: readPageCounter(0), writePageCounter(0), appendPageCounter(0)
 {
 }
 
@@ -183,7 +344,8 @@ RC IXFileHandle::collectCounterValues(unsigned &readPageCount, unsigned &writePa
 {
 	RC errCode = 0;
 
-	_bucketDataFileHandler.collectCounterValues(readPageCount, writePageCount, appendPageCount);
+	_primBucketDataFileHandler.collectCounterValues(readPageCount, writePageCount, appendPageCount);
+	_overBucketDataFileHandler.collectCounterValues(readPageCount, writePageCount, appendPageCount);
 	_metaDataFileHandler.collectCounterValues(readPageCount, writePageCount, appendPageCount);
 
 	return errCode;
@@ -203,6 +365,10 @@ void IX_PrintError (RC rc)
 	else if( rc <= -30 && rc >= -37 )
 	{
 		compName = "RelationalManager";
+	}
+	else if( rc <= -40 )
+	{
+		compName = "IndexManager";
 	}
 	std::string errMsg = "";
 	switch(rc)
@@ -302,6 +468,12 @@ void IX_PrintError (RC rc)
 		break;
 	case -37:
 		errMsg = "wrong table arguments";
+		break;
+	case -40:
+		errMsg = "index map is corrupted";
+		break;
+	case -41:
+		errMsg = "primary bucket has wrong number of pages";
 		break;
 	}
 	//print message
