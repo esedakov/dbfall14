@@ -97,7 +97,7 @@ RC PagedFileManager::createFile(const char *fileName)
 	return 0;
 }
 
-RC PagedFileManager::createFileHeader(const char * fileName, unsigned int numOfInitialPages)
+RC PagedFileManager::createFileHeader(const char * fileName)
 {
 	/*
 	 * create a header a page:
@@ -120,28 +120,15 @@ RC PagedFileManager::createFileHeader(const char * fileName, unsigned int numOfI
 	//create a header
 	Header header;
 
-	int i = 0;
-	while(i < numOfInitialPages)
-	{
-		//set all header fields to 0
-		memset(&header, 0, sizeof(Header));
+	//set all header fields to 0
+	memset(&header, 0, sizeof(Header));
 
-		//set number of pages
-		if( i == 0 )
-		{
-			header._totFileSize = numOfInitialPages;
-			fileHandle._info->_numPages = numOfInitialPages;
-		}
+	//insert page header into the file
+	fileHandle.appendPage(&header);
 
-		//insert page header into the file
-		fileHandle.appendPage(&header);
+	//write back that this file has number of pages = 1
+	fileHandle.writeBackNumOfPages();
 
-		//write back that this file has number of pages = 1
-		fileHandle.writeBackNumOfPages();
-
-		//update counter <i>
-		i++;
-	}
 	//close file
 	errCode = closeFile(fileHandle);
 	if(errCode != 0)
@@ -531,9 +518,9 @@ RC FileHandle::collectCounterValues(unsigned &readPageCount, unsigned &writePage
 {
 	RC errCode = 0;
 
-	readPageCount = this->readPageCounter;
-	writePageCount = this->writePageCounter;
-	appendPageCount = this->appendPageCounter;
+	readPageCount += this->readPageCounter;
+	writePageCount += this->writePageCounter;
+	appendPageCount += this->appendPageCounter;
 
 	return errCode;
 }

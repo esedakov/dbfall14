@@ -52,51 +52,23 @@ RecordBasedFileManager::~RecordBasedFileManager()
  * -24 = directory slot stores wrong information
  * -25 = cannot update record without change of rid (no space within the given page, and cannot move to a different page!)
  * -26 = no requested attribute was found inside the record
- * -27 = could not find header page for the specified id of the data page (list of headers is corrupted)
- * -28 = page number exceeds the total number of pages in a file
+ * -27 = page number exceeds the total number of pages in a file
 **/
 
 RC RecordBasedFileManager::createFile(const string &fileName) {
 	//error value
 	RC errCode = 0;
 
+	const char* cArrFileName = fileName.c_str();
+
 	//create an empty file using pfm (i.e. PagedFileManager)
-	if( (errCode = _pfm->createFile( fileName.c_str() )) != 0 )
+	if( (errCode = _pfm->createFile( cArrFileName )) != 0 )
 	{
 		return errCode;
 	}
 
-	/*
-	 * create a header a page:
-	 * I use a page directory method, which implies usage of "linked list" of page headers.
-	 * The content of header page is as follows:
-	 *   + nextHeaderPageId:PageNum
-	 *   + numUsedPageIds:PageNum (i.e. unsigned integer)
-	 *   + array of <pageIds:(unsigned integer), numFreeBytes:{unsigned integer}> for the rest of header page => (unsigned integer)[PAGE_SIZE - 2*SIZEOF(pageNum)]
-	**/
-	//open file
-	FileHandle fileHandle;
-	errCode = _pfm->openFile(fileName.c_str(), fileHandle);
-	if(errCode != 0)
-	{
-		return errCode;
-	}
-
-	//create a header
-	Header header;
-
-	//set all header fields to 0
-	memset(&header, 0, sizeof(Header));
-
-	//insert page header into the file
-	fileHandle.appendPage(&header);
-
-	//write back that this file has number of pages = 1
-	fileHandle.writeBackNumOfPages();
-
-	//close file
-	errCode = _pfm->closeFile(fileHandle);
-	if(errCode != 0)
+	//create header
+	if( (errCode = _pfm->createFileHeader( cArrFileName )) != 0 )
 	{
 		return errCode;
 	}
@@ -147,154 +119,6 @@ RC RecordBasedFileManager::closeFile(FileHandle &fileHandle) {
 
 	//success => return 0
 	return errCode;
-}
-
-RC RecordBasedFileManager::getDataPage(FileHandle &fileHandle, const unsigned int recordSize, PageNum& pageNum, PageNum& headerPage, unsigned int& freeSpaceLeftInPage)
-{
-	RC errCode = 0;
-
-	//maintain current header page id and its former value (from past iteration)
-	unsigned int headerPageId = 0, lastHeaderPageId = 0;
-
-	//keep array of bytes of size of page for reading in page data
-	void* data = malloc(PAGE_SIZE);
-
-	//casted data to header page
-	Header* hPage = NULL;
-
-	//loop thru header pages
-	do
-	{
-		//get the first header page
-		if( (errCode = fileHandle.readPage((PageNum)headerPageId, data)) != 0 )
-		{
-			//deallocate data
-			free(data);
-
-			//return error
-			return errCode;
-		}
-
-		//cast data to Header
-		hPage = (Header*)data;
-
-		//get the id of the next header page
-		lastHeaderPageId = headerPageId;
-		headerPageId = hPage->_nextHeaderPageId;
-
-		//loop thru page entries of the current header page
-		for( unsigned int i = 0; i < hPage->_numUsedPageIds; i++ )
-		{
-			//get the current data page information
-			PageInfo* pi = &(hPage->_arrOfPageIds[i]);
-
-			//if it has the proper number of free bytes than return information about this page
-			if( pi->_numFreeBytes >= recordSize + sizeof(PageDirSlot) )	//inconsistency found: if amount of free space left in page and requested size are exactly equal than it would skip this candidate page and allocate a new data page, so I changed '>' to '>='
-			{
-				//assign id
-				pageNum = pi->_pageid;
-
-				//update free space left
-				pi->_numFreeBytes -= recordSize + sizeof(PageDirSlot);
-
-				freeSpaceLeftInPage = pi->_numFreeBytes;
-
-				//assign a header page
-				headerPage = lastHeaderPageId;
-
-				//write header page
-				fileHandle.writePage(headerPage, data);
-
-				//deallocate data
-				free(data);
-
-				//return success
-				return 0;
-			}
-		}
-
-	} while(headerPageId > 0);
-
-	//assign a header page id
-	headerPage = lastHeaderPageId;
-
-	//check if last processed header page can NOT fit a meta-data for new record
-	if( hPage->_numUsedPageIds >= NUM_OF_PAGE_IDS )
-	{
-		//this header page is full, need to create new header page
-		//assign a new header page id
-		PageNum nextPageId = fileHandle.getNumberOfPages();
-
-		//assign a next header page
-		hPage->_nextHeaderPageId = nextPageId;
-
-		//save header page
-		fileHandle.writePage(headerPage, data);
-
-		headerPage = nextPageId;
-
-		//prepare parameters for header page allocation
-		memset(data, 0, PAGE_SIZE);
-
-		//append new header page
-		if( (errCode = fileHandle.appendPage(data)) != 0 )
-		{
-			//deallocate data
-			free(data);
-
-			//return error code
-			return errCode;
-		}
-
-		//later all fields of header page are accessed by dereferencing to Header structure
-		hPage = (Header*)data;
-	}
-
-	//need to allocate new data page, because all available data pages do not have enough of free space
-	//prepare parameters for data page allocation
-	void* dataPage = malloc(PAGE_SIZE);
-	memset((void*)dataPage, 0, PAGE_SIZE);
-
-	//allocate a new data page
-	if( (errCode = fileHandle.appendPage(dataPage)) != 0 )
-	{
-		//deallocate data and dataPaga
-		free(data);
-		free(dataPage);
-
-		//if failed, return error code
-		return errCode;
-	}
-
-	//get page id of this newly added page
-	PageNum dataPageId = fileHandle.getNumberOfPages() - 1;	//page indexes are off by extra 1, header page is '0' and first data page is '1'!
-
-	//set the new record
-	hPage->_arrOfPageIds[hPage->_numUsedPageIds]._pageid = dataPageId;
-	if( hPage->_arrOfPageIds[hPage->_numUsedPageIds]._numFreeBytes == 0 )
-		hPage->_arrOfPageIds[hPage->_numUsedPageIds]._numFreeBytes = PAGE_SIZE - 2 * sizeof(unsigned int);
-	hPage->_arrOfPageIds[hPage->_numUsedPageIds]._numFreeBytes -= recordSize + sizeof(PageDirSlot);
-
-	freeSpaceLeftInPage = hPage->_arrOfPageIds[hPage->_numUsedPageIds]._numFreeBytes;
-
-	//assign data page id
-	pageNum = dataPageId;
-
-	//increment number of page IDs used in this page
-	hPage->_numUsedPageIds++;
-
-	//write header page
-	fileHandle.writePage(headerPage, data);
-
-	//write data page
-	fileHandle.writePage(dataPageId, dataPage);
-
-	//deallocate data(s)
-	free(data);
-	free(dataPage);
-
-	//return success, because technically no error occurred
-	return 0;
 }
 
 RC RecordBasedFileManager::findRecordSlot(FileHandle &fileHandle, PageNum pagenum, const unsigned int szRecord, PageDirSlot& slot, unsigned int& slotNum, unsigned int freeSpaceLeftInPage)
@@ -612,7 +436,7 @@ RC RecordBasedFileManager::insertRecord(FileHandle &fileHandle, const vector<Att
 
 	//get page that contains the necessary amount of free space
 	PageNum datapagenum = 0, headerpagenum = 0;
-	if( (errCode = getDataPage(fileHandle, szOfEncRecord, datapagenum, headerpagenum, freeSpaceLeft)) != 0 )
+	if( (errCode = _pfm->getDataPage(fileHandle, szOfEncRecord, datapagenum, headerpagenum, freeSpaceLeft)) != 0 )
 	{
 		//free buffer used for encoded record
 		free(encData);
@@ -685,7 +509,7 @@ RC RecordBasedFileManager::readEncodedRecord(FileHandle &fileHandle, const vecto
 
     if( rid.pageNum == 0 || rid.pageNum >= fileHandle.getNumberOfPages() )
     {
-    	return -28; //rid is not setup correctly
+    	return -27; //rid is not setup correctly
     }
 
     //allocate array for storing contents of the data page
@@ -1011,7 +835,7 @@ RC RecordBasedFileManager::deleteRecord(FileHandle &fileHandle, const vector<Att
 	PageNum headerPage = 0;
 
 	//get header for this data page
-	if( (errCode = findHeaderPage(fileHandle, rid.pageNum, headerPage)) != 0 )
+	if( (errCode = _pfm->findHeaderPage(fileHandle, rid.pageNum, headerPage)) != 0 )
 	{
 		//free buffers
 		free(dataPage);
@@ -1377,7 +1201,7 @@ RC RecordBasedFileManager::reorganizePage(FileHandle &fileHandle, const vector<A
 	//check that page number has legal value
 	if( pageNumber >= fileHandle.getNumberOfPages() )
 	{
-		return -28;	//given page number exceeds total number of pages in a file
+		return -27;	//given page number exceeds total number of pages in a file
 	}
 
 	//allocate buffer to hold a copy of page
@@ -1484,7 +1308,7 @@ RC RecordBasedFileManager::reorganizePage(FileHandle &fileHandle, const vector<A
 		PageNum headerPage = 0;
 
 		//get header for this data page
-		if( (errCode = findHeaderPage(fileHandle, pageNumber, headerPage)) != 0 )
+		if( (errCode = _pfm->findHeaderPage(fileHandle, pageNumber, headerPage)) != 0 )
 		{
 			//free buffers
 			free(reorganizedPage);
@@ -1551,64 +1375,6 @@ RC RecordBasedFileManager::reorganizePage(FileHandle &fileHandle, const vector<A
 
 	//return success
 	return errCode;
-}
-
-RC RecordBasedFileManager::findHeaderPage(FileHandle fileHandle, PageNum pageId, PageNum& retHeaderPage)
-{
-	RC errCode = 0;
-
-	//counters for current header IDs to loop thru
-	PageNum headerPageId = 0;
-
-	//pointer to the header page
-	Header* hPage = NULL;
-
-	//allocate temporary buffer for page
-	void* data = malloc(PAGE_SIZE);
-
-	//loop thru header pages
-	do
-	{
-		//get the first header page
-		if( (errCode = fileHandle.readPage((PageNum)headerPageId, data)) != 0 )
-		{
-			//deallocate data
-			free(data);
-
-			//return error
-			return errCode;
-		}
-
-		//cast data to Header
-		hPage = (Header*)data;
-
-		if( pageId <= hPage->_numUsedPageIds )	//NumUsedPageIds counts only the data pages used within this header
-												//data pages start from 1 and go up
-												//pageId is not necessarily equal to page number (i.e. for header pages > 0, it is a module of page number and num_of_page_ids, so it varies between [1, num_page_ids))
-												//for this reason, the comparison between pageId and and numUsedPageIds is inclusive
-		{
-			//assign a found page id
-			retHeaderPage = headerPageId;
-
-			//free temporary buffer for header page
-			free(data);
-
-			//return success
-			return errCode;
-		}
-
-		pageId -= NUM_OF_PAGE_IDS;
-
-		//go to next header page
-		headerPageId = hPage->_nextHeaderPageId;
-
-	} while(headerPageId > 0);
-
-	//deallocate temporary buffer for header page
-	free(data);
-
-	//return error
-	return -27;
 }
 
 RC RecordBasedFileManager::scan(FileHandle &fileHandle,
@@ -1875,7 +1641,7 @@ RC	RBFM_ScanIterator::getNextRecord(RID &rid, void* data)
 			}
 
 			//if page number exceeds the maximum stored in this file, then
-			if( errCode == -28 )
+			if( errCode == -27 )
 			{
 				//deallocate space assigned for record
 				free(curRecord);
@@ -2048,7 +1814,7 @@ RC	RBFM_ScanIterator::getNextRecord(RID &rid, void* data)
 					_slotnum++;
 
 					//return success
-					return 0;	//do not substitute 0 with errCode, since the later value is likely to be equal to -28 or -23 (see above)
+					return 0;	//do not substitute 0 with errCode, since the later value is likely to be equal to -27 or -23 (see above)
 				}
 
 				//if it is not match, then go to next record

@@ -85,23 +85,6 @@ public:
 	//vector<string> _attributeNames;
 };
 
-//new structure - PageDirSlot. beginning.
-/*
- * page directory slot that stores offset to the record and its size
-**/
-struct PageDirSlot
-{
-	/*
-	 * offset (in bytes) to the start of record from the start of the data page
-	**/
-	unsigned int _offRecord;
-	/*
-	 * size of record (in bytes)
-	**/
-	unsigned int _szRecord;
-};
-//new structure - PageDirSlot. end.
-
 class RecordBasedFileManager
 {
 public:
@@ -131,7 +114,7 @@ public:
   /*
    * get page (if necessary insert new) that has enough free space for specified size of record
   **/
-  RC getDataPage(FileHandle &fileHandle, const unsigned int recordSize, PageNum& foundPage, PageNum& headerPage, unsigned int& freeSpaceLeftInPage);
+  //RC getDataPage(FileHandle &fileHandle, const unsigned int recordSize, PageNum& foundPage, PageNum& headerPage, unsigned int& freeSpaceLeftInPage);
 
   /*
    * find place for the record in the given page
@@ -142,7 +125,7 @@ public:
   RC printRecord(const vector<Attribute> &recordDescriptor, const void *data);
 
   //get header page that contains the given data page id inside it
-  RC findHeaderPage(FileHandle fileHandle, PageNum pageId, PageNum& retHeaderPage);
+  //RC findHeaderPage(FileHandle fileHandle, PageNum pageId, PageNum& retHeaderPage);
 
   //due to changes made for project 2 extra credit, record descriptor might have empty elements in it. They should not count among the real
   //elements, and this function basically loops thru the list and determines the number of real fields
