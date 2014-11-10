@@ -50,6 +50,14 @@ int testCase_1(const string &indexFileName)
         return fail;
     }
 
+    //add by me
+	std::cout << "meta file:" << endl << endl;
+	printFile(ixfileHandle._metaDataFileHandler);
+	std::cout << "overflow file:" << endl << endl;
+	printFile(ixfileHandle._overBucketDataFileHandler);
+	std::cout << "primary file:" << endl << endl;
+	printFile(ixfileHandle._primBucketDataFileHandler);
+
     rc = indexManager->getNumberOfAllPages(ixfileHandle, numberOfPagesFromFunction);
     if(rc == success)
     {
@@ -91,6 +99,14 @@ int testCase_1(const string &indexFileName)
         return fail;
     }
 
+    //add by me
+    std::cout << "meta file:" << endl << endl;
+    printFile(ixfileHandle._metaDataFileHandler);
+    std::cout << "overflow file:" << endl << endl;
+    printFile(ixfileHandle._overBucketDataFileHandler);
+    std::cout << "primary file:" << endl << endl;
+    printFile(ixfileHandle._primBucketDataFileHandler);
+
     // close index file
     rc = indexManager->closeFile(ixfileHandle);
     if(rc == success)
@@ -101,6 +117,17 @@ int testCase_1(const string &indexFileName)
     {
         cout << "Failed Closing Index File..." << endl;
         return fail;
+    }
+    //destroy index file
+    rc = indexManager->destroyFile(indexFileName);	//added by me (should be removed later)
+    if( rc == success )
+    {
+    	cout << "Index File destroyed Successfully!" << endl;
+    }
+    else
+    {
+    	cout << "Failed destroying Index File..." << endl;
+    	return fail;
     }
     return success;
 }

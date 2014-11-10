@@ -3,6 +3,7 @@
 #include <sys/stat.h>
 #include <string.h>
 #include <stdlib.h>
+#include <iostream>
 
 PagedFileManager* PagedFileManager::_pf_manager = 0;
 
@@ -124,10 +125,15 @@ RC PagedFileManager::createFileHeader(const char * fileName)
 	memset(&header, 0, sizeof(Header));
 
 	//insert page header into the file
-	fileHandle.appendPage(&header);
+	//if( (errCode = insertPage(fileHandle, headerPageId, dataPageId, &header)) != 0 )
+	if( (errCode = fileHandle.appendPage(&header)) != 0 )
+	{
+		//return error code
+		return errCode;
+	}
 
 	//write back that this file has number of pages = 1
-	fileHandle.writeBackNumOfPages();
+	//fileHandle.writeBackNumOfPages();	//now PFM closeFile has this function
 
 	//close file
 	errCode = closeFile(fileHandle);
@@ -196,6 +202,90 @@ RC PagedFileManager::findHeaderPage(FileHandle fileHandle, PageNum pageId, PageN
 
 	//return error
 	return -16;
+}
+
+RC PagedFileManager::insertPage(FileHandle & fileHandle, PageNum & headerPageId, PageNum & dataPageId, const void* content)
+{
+	RC errCode = 0;
+
+	//allocate buffer for header page
+	void* data = malloc(PAGE_SIZE);
+	memset(data, 0, PAGE_SIZE);
+
+	//read header page
+	if( (errCode = fileHandle.readPage(headerPageId, data)) != 0 )
+	{
+		//deallocate buffer
+		free(data);
+		//return error code
+		return errCode;
+	}
+
+	//cast buffer to header
+	Header* hPage = (Header*)data;
+
+	//check if last processed header page can NOT fit a meta-data for new page record
+	if( hPage->_numUsedPageIds >= NUM_OF_PAGE_IDS )
+	{
+		//this header page is full, need to create new header page
+		//assign a new header page id
+		PageNum nextPageId = fileHandle.getNumberOfPages();
+
+		//assign a next header page
+		hPage->_nextHeaderPageId = nextPageId;
+
+		//save header page
+		fileHandle.writePage(headerPageId, data);
+
+		headerPageId = nextPageId;
+
+		//prepare parameters for header page allocation
+		memset(data, 0, PAGE_SIZE);
+
+		//append new header page
+		if( (errCode = fileHandle.appendPage(data)) != 0 )
+		{
+			//deallocate data
+			free(data);
+
+			//return error code
+			return errCode;
+		}
+
+		//later all fields of header page are accessed by dereferencing to Header structure
+		hPage = (Header*)data;
+	}
+
+	//allocate a new data page
+	if( (errCode = fileHandle.appendPage(content)) != 0 )
+	{
+		//deallocate data and dataPaga
+		free(data);
+
+		//if failed, return error code
+		return errCode;
+	}
+
+	//get page id of this newly added page
+	dataPageId = fileHandle.getNumberOfPages() - 1;	//page indexes are off by extra 1, header page is '0' and first data page is '1'!
+
+	//set the new record
+	hPage->_arrOfPageIds[hPage->_numUsedPageIds]._pageid = dataPageId;
+
+	//set the free space
+	hPage->_arrOfPageIds[hPage->_numUsedPageIds]._numFreeBytes = PAGE_SIZE;
+
+	//increment number of page IDs used in this page
+	hPage->_numUsedPageIds++;
+
+	//write header page
+	fileHandle.writePage(headerPageId, data);
+
+	//deallocate data(s)
+	free(data);
+
+	//return success, because technically no error occurred
+	return 0;
 }
 
 RC PagedFileManager::getDataPage(FileHandle &fileHandle, const unsigned int recordSize, PageNum& pageNum, PageNum& headerPage, unsigned int& freeSpaceLeftInPage)
@@ -267,76 +357,47 @@ RC PagedFileManager::getDataPage(FileHandle &fileHandle, const unsigned int reco
 	//assign a header page id
 	headerPage = lastHeaderPageId;
 
-	//check if last processed header page can NOT fit a meta-data for new record
-	if( hPage->_numUsedPageIds >= NUM_OF_PAGE_IDS )
+	void* dataPage = malloc(PAGE_SIZE);
+	memset(dataPage, 0, PAGE_SIZE);
+
+	if( (errCode = insertPage(fileHandle, headerPage, pageNum, dataPage)) != 0 )
 	{
-		//this header page is full, need to create new header page
-		//assign a new header page id
-		PageNum nextPageId = fileHandle.getNumberOfPages();
+		//free buffers
+		free(data);
+		free(dataPage);
+		//return error code
+		return errCode;
+	}
 
-		//assign a next header page
-		hPage->_nextHeaderPageId = nextPageId;
-
-		//save header page
-		fileHandle.writePage(headerPage, data);
-
-		headerPage = nextPageId;
-
-		//prepare parameters for header page allocation
+	//in case of a different header page, need to reassign hPage pointer
+	if( headerPageId != headerPage )
+	{
+		//null data (hPage was not changed upto this point, so no need to write it back)
 		memset(data, 0, PAGE_SIZE);
 
-		//append new header page
-		if( (errCode = fileHandle.appendPage(data)) != 0 )
+		//read a specified header page
+		if( (errCode = fileHandle.readPage(headerPage, data)) != 0 )
 		{
-			//deallocate data
+			//deallocate buffer
 			free(data);
-
+			free(dataPage);
 			//return error code
 			return errCode;
 		}
 
-		//later all fields of header page are accessed by dereferencing to Header structure
+		//cast it to Header pointer
 		hPage = (Header*)data;
 	}
 
-	//need to allocate new data page, because all available data pages do not have enough of free space
-	//prepare parameters for data page allocation
-	void* dataPage = malloc(PAGE_SIZE);
-	memset((void*)dataPage, 0, PAGE_SIZE);
-
-	//allocate a new data page
-	if( (errCode = fileHandle.appendPage(dataPage)) != 0 )
-	{
-		//deallocate data and dataPaga
-		free(data);
-		free(dataPage);
-
-		//if failed, return error code
-		return errCode;
-	}
-
-	//get page id of this newly added page
-	PageNum dataPageId = fileHandle.getNumberOfPages() - 1;	//page indexes are off by extra 1, header page is '0' and first data page is '1'!
-
-	//set the new record
-	hPage->_arrOfPageIds[hPage->_numUsedPageIds]._pageid = dataPageId;
-	if( hPage->_arrOfPageIds[hPage->_numUsedPageIds]._numFreeBytes == 0 )
-		hPage->_arrOfPageIds[hPage->_numUsedPageIds]._numFreeBytes = PAGE_SIZE - 2 * sizeof(unsigned int);
+	//set free space
+	if( hPage->_arrOfPageIds[hPage->_numUsedPageIds]._numFreeBytes == PAGE_SIZE )
+		hPage->_arrOfPageIds[hPage->_numUsedPageIds]._numFreeBytes -= 2 * sizeof(unsigned int);
 	hPage->_arrOfPageIds[hPage->_numUsedPageIds]._numFreeBytes -= recordSize + sizeof(PageDirSlot);
 
 	freeSpaceLeftInPage = hPage->_arrOfPageIds[hPage->_numUsedPageIds]._numFreeBytes;
 
-	//assign data page id
-	pageNum = dataPageId;
-
-	//increment number of page IDs used in this page
-	hPage->_numUsedPageIds++;
-
 	//write header page
 	fileHandle.writePage(headerPage, data);
-
-	//write data page
-	fileHandle.writePage(dataPageId, dataPage);
 
 	//deallocate data(s)
 	free(data);
@@ -493,6 +554,9 @@ RC PagedFileManager::closeFile(FileHandle &fileHandle)
 	{
 		return -9;
 	}
+
+	//write the number of pages back to the header
+	fileHandle.writeBackNumOfPages();
 
 	//decrement "file open instance" counter
 	(fileHandle._info->_numOpen)--;
@@ -763,4 +827,45 @@ access_flag FileHandle::getAccess(bool& success)
 	//success
 	success = true;
 	return flag;
+}
+
+void printFile(FileHandle& fileHandle)
+{
+	RC errCode = 0;
+
+	void* data = malloc(PAGE_SIZE);
+	memset(data, 0, PAGE_SIZE);
+
+	for( unsigned int i = 0; i < fileHandle._info->_numPages; i++ )
+	{
+		std::cout << std::endl << std::endl << "====================PAGE#" << i << "====================" << std::endl << std::endl;
+		if( (errCode = fileHandle.readPage(i, data)) != 0 )
+		{
+			std::cout << "error code: " << errCode << "; aborting...";
+			free(data);
+			exit(-1);
+		}
+
+		for(int j = 0; j < PAGE_SIZE; j++)
+		{
+			char c = ((char*)data)[j];
+
+			if( (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') )
+			{
+				std::cout << c;
+			}
+			else
+			{
+				std::cout << (unsigned int)c;
+			}
+
+			std::cout << " | ";
+			if( (j + 1) % 16 == 0 )
+			{
+				std::cout << std::endl;
+			}
+		}
+	}
+
+	free(data);
 }

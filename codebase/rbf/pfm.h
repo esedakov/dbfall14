@@ -50,6 +50,7 @@ public:
     RC openFile      (const char *fileName, FileHandle &fileHandle); // Open a file
     RC closeFile     (FileHandle &fileHandle);                       // Close a file
     RC getDataPage(FileHandle &fileHandle, const unsigned int recordSize, PageNum& pageNum, PageNum& headerPage, unsigned int& freeSpaceLeftInPage);
+    RC insertPage(FileHandle &fileHandle, PageNum& headerPageId, PageNum& dataPageId, const void* content);
     RC findHeaderPage(FileHandle fileHandle, PageNum pageId, PageNum& retHeaderPage);
 
 protected:
@@ -179,5 +180,7 @@ struct PageDirSlot
 };
 //new structure - PageDirSlot. end.
 
+//utility functions
+void printFile(FileHandle& fileHandle);
 
- #endif
+#endif

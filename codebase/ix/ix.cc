@@ -1,4 +1,4 @@
-
+#include <string.h>
 #include "ix.h"
 #include <iostream>
 #include <stdlib.h>
@@ -38,10 +38,11 @@ RC IndexManager::createFile(const string &fileName, const unsigned &numberOfPage
 	//	the first (meta-data) file will be called <fileName>_meta
 	//	the second (primary bucket-data) file will be called <fileName>_prim
 	//	the third (overflow bucket-data) file will be called <fileName>_over
-	const char
-		*metaFileName = (fileName + "_meta").c_str(),
-		*primaryBucketFileName = (fileName + "_prim").c_str(),
-		*overflowBucketFileName = (fileName + "_over").c_str();
+	string strMeta = fileName + "_meta", strBucket = fileName + "_prim", strOverflow = fileName + "_over";
+	const char *metaFileName = strMeta.c_str();
+	const char *primaryBucketFileName = strBucket.c_str();
+	const char *overflowBucketFileName = strOverflow.c_str();
+
 	if( (errCode = _pfm->createFile(metaFileName)) != 0 ||
 		(errCode = _pfm->createFileHeader(metaFileName)) != 0 ||
 		(errCode = _pfm->createFile(primaryBucketFileName)) != 0 ||
@@ -55,6 +56,7 @@ RC IndexManager::createFile(const string &fileName, const unsigned &numberOfPage
 
 	//allocate buffer for storing the meta-data
 	void* data = malloc(PAGE_SIZE);
+	memset(data, 0, PAGE_SIZE);
 
 	//initialize N, Level, and Next
 	indexInfo info(numberOfPages, 0, 0);
@@ -74,8 +76,11 @@ RC IndexManager::createFile(const string &fileName, const unsigned &numberOfPage
 		return errCode;
 	}
 
+	PageNum headerPageId = 0, dataPageId = 0;
+
 	//write in a second page that will store meta-data header
-	if( (errCode = handle._metaDataFileHandler.appendPage(data)) != 0 )
+	//if( (errCode = handle._metaDataFileHandler.appendPage(data)) != 0 )
+	if( (errCode = _pfm->insertPage(handle._metaDataFileHandler, headerPageId, dataPageId, data)) != 0 )
 	{
 		//close file
 		_pfm->closeFile(handle._metaDataFileHandler);
@@ -103,10 +108,14 @@ RC IndexManager::createFile(const string &fileName, const unsigned &numberOfPage
 		return errCode;
 	}
 
+	//clear the buffer, since it has contents of IX header now
+	memset(data, 0, PAGE_SIZE);
+
 	//insert N primary pages
 	for( unsigned int i = 0; i < numberOfPages; i++ )
 	{
-		if( (errCode = handle._primBucketDataFileHandler.appendPage(data)) != 0 )
+		//if( (errCode = handle._primBucketDataFileHandler.appendPage(data)) != 0 )
+		if( (errCode = _pfm->insertPage(handle._primBucketDataFileHandler, headerPageId, dataPageId, data)) != 0 )
 		{
 			//deallocate buffer
 			free(data);
@@ -160,9 +169,14 @@ RC IndexManager::destroyFile(const string &fileName)	//NOT TESTED
 	//for faster function access create a PFM pointer
 	PagedFileManager* _pfm = PagedFileManager::instance();
 
-	if( (errCode = _pfm->destroyFile( (fileName + "_meta").c_str() )) != 0 ||
-		(errCode = _pfm->destroyFile( (fileName + "_prim").c_str() )) != 0 ||
-		(errCode = _pfm->destroyFile( (fileName + "_over").c_str() )) != 0 )
+	string strMeta = fileName + "_meta", strBucket = fileName + "_prim", strOverflow = fileName + "_over";
+	const char *metaFileName = strMeta.c_str();
+	const char *primaryBucketFileName = strBucket.c_str();
+	const char *overflowBucketFileName = strOverflow.c_str();
+
+	if( (errCode = _pfm->destroyFile( metaFileName )) != 0 ||
+		(errCode = _pfm->destroyFile( primaryBucketFileName )) != 0 ||
+		(errCode = _pfm->destroyFile( overflowBucketFileName )) != 0 )
 	{
 		//return error code
 		return errCode;
@@ -179,10 +193,15 @@ RC IndexManager::openFile(const string &fileName, IXFileHandle &ixFileHandle)	//
 	//for faster function access create a PFM pointer
 	PagedFileManager* _pfm = PagedFileManager::instance();
 
+	string strMeta = fileName + "_meta", strBucket = fileName + "_prim", strOverflow = fileName + "_over";
+	const char *metaFileName = strMeta.c_str();
+	const char *primaryBucketFileName = strBucket.c_str();
+	const char *overflowBucketFileName = strOverflow.c_str();
+
 	//open meta-data, primary-bucket, and overflow-bucket files
-	if( (errCode = _pfm->openFile( (fileName + "_meta").c_str(), ixFileHandle._metaDataFileHandler )) != 0 ||
-		(errCode = _pfm->openFile( (fileName + "_prim").c_str(), ixFileHandle._primBucketDataFileHandler )) != 0 ||
-		(errCode = _pfm->openFile( (fileName + "_over").c_str(), ixFileHandle._overBucketDataFileHandler )) != 0 )
+	if( (errCode = _pfm->openFile( metaFileName, ixFileHandle._metaDataFileHandler )) != 0 ||
+		(errCode = _pfm->openFile( primaryBucketFileName, ixFileHandle._primBucketDataFileHandler )) != 0 ||
+		(errCode = _pfm->openFile( overflowBucketFileName, ixFileHandle._overBucketDataFileHandler )) != 0 )
 	{
 		//return error code
 		return errCode;
@@ -225,9 +244,21 @@ RC IndexManager::openFile(const string &fileName, IXFileHandle &ixFileHandle)	//
 	it->second.Level = *( ((unsigned int*)data) + 1 );
 	it->second.Next = *( ((unsigned int*)data) + 2 );
 
-	//make sure that primary-bucket file has N+1 pages
-	if( ixFileHandle._primBucketDataFileHandler.getNumberOfPages() != it->second.N )
+	unsigned int numPages = 0;
+	if( (errCode = getNumberOfPrimaryPages(ixFileHandle, numPages)) != 0 )
 	{
+		//deallocate buffer
+		free(data);
+		//return error code
+		return errCode;
+	}
+
+	//make sure that primary-bucket file has N+1 pages
+	if( numPages != it->second.N )
+	{
+		//deallocate buffer
+		free(data);
+		//return error code
 		return -41;	//primary bucket has wrong number of pages
 	}
 

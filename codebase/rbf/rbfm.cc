@@ -108,9 +108,6 @@ RC RecordBasedFileManager::closeFile(FileHandle &fileHandle) {
     //error value
 	RC errCode = 0;
 
-	//write the number of pages back to the header
-	fileHandle.writeBackNumOfPages();
-
 	//close a file
 	if( (errCode = _pfm->closeFile( fileHandle )) != 0 )
 	{
