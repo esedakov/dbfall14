@@ -7,9 +7,6 @@ void TEST_RM_12(const string &tableName, vector<RID> &rids)
     // 2. read tuple
     cout << "****In Test case 12****" << endl;
 
-    //added
-    //rm->printTable(tableName);
-
     int numTuples = 2000;
     RC rc = 0;
     void * returnedData = malloc(1000);
@@ -26,9 +23,6 @@ void TEST_RM_12(const string &tableName, vector<RID> &rids)
         assert(rc != success);
     }
     cout << "After deletion!" << endl;
-
-    //added
-    //rm->printTable(tableName);
 
     for(int i = 1000; i < 2000; i++)
     {

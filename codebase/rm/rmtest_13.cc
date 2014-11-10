@@ -6,9 +6,6 @@ void TEST_RM_13(const string &tableName)
     // 1. scan
     cout << "****In Test case 13****" << endl;
 
-    //added
-    //rm->printTable(tableName);
-
     RM_ScanIterator rmsi;
     vector<string> attrs;
     attrs.push_back("attr5");

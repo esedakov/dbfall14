@@ -125,9 +125,6 @@ void prepareLargeRecordForTwitterUser(const int index, void *buffer,
 	int count = index % 200 + 1;
 	int text = index % 26 + 97;
 	string suffix(count, text);
-	for (int i = 0; i < count - 1; i++) {
-		suffix += text;
-	}
 
 	// userid = index
 	memcpy((char *) buffer + offset, &index, sizeof(int));
@@ -197,8 +194,8 @@ bool compareFileSizes(string fileName1, string fileName2) {
 	in2.seekg(0, ifstream::end);
 	s2 = in2.tellg();
 
-	cout << "File 1 size: " << s1 << "\n";
-	cout << "File 2 size: " << s2 << "\n";
+	cout << "File 1 size: " << s1 << endl;
+	cout << "File 2 size: " << s2 << endl;
 
 	if (s1 != s2) {
 		return false;

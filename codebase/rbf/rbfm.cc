@@ -108,6 +108,16 @@ RC RecordBasedFileManager::closeFile(FileHandle &fileHandle) {
     //error value
 	RC errCode = 0;
 
+	//write the number of pages back to the header
+	fileHandle.writeBackNumOfPages();	//moved out from closeFile, since PFM test case # 5 was failing
+										//	reason: PFM functions read/close/append has no understanding of the file headers, so they
+										//			should not alter these attributes. When close was calling writeBackNumOfPages it
+										//			was breaking this agreement - so it was overwriting the data in the data page # 0,
+										//			with the intention to update number of pages in the file. But test case # 5, does
+										//			not require any page headers. In fact, it was storing data in the page # 0. When this
+										//			function (writeBackNumOfPages) was called it was overwriting the data, which caused
+										//			Memcmp to fail...
+
 	//close a file
 	if( (errCode = _pfm->closeFile( fileHandle )) != 0 )
 	{

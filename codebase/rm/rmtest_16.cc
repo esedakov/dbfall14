@@ -4,16 +4,9 @@ void TEST_RM_16(const string &tableName)
 {
     cout << "****In Test Case 16****" << endl;
 
-    RecordBasedFileManager* rbfm = RecordBasedFileManager::instance();
-
-    // Open Catalog File
-    FileHandle catalog_fh;
-    RC rc = rbfm->openFile(tableName, catalog_fh);
-    assert(rc == success);
-
     // Get Catalog Attributes
     vector<Attribute> attrs;
-    rc = rm->getAttributes(tableName, attrs);
+    RC rc = rm->getAttributes(tableName, attrs);
     assert(rc == success);
 
     // print attribute name
@@ -28,20 +21,20 @@ void TEST_RM_16(const string &tableName)
     void *returnedData = malloc(100);
 
     // Set up the iterator
-    RBFM_ScanIterator rsi;
+    RM_ScanIterator rmsi;
     vector<string> projected_attrs;
-    for (int i = 0 ; i < attrs.size() ; i++){
+    for (int i = 0; i < attrs.size(); i++){
       projected_attrs.push_back(attrs[i].name);
     }
 
-    rc = rbfm->scan(catalog_fh, attrs, "", NO_OP, NULL, projected_attrs, rsi);
+    rc = rm->scan(tableName, "", NO_OP, NULL, projected_attrs, rmsi);
     assert(rc == success);
 
-    while(rsi.getNextRecord(rid, returnedData) != RM_EOF)
+    while(rmsi.getNextTuple(rid, returnedData) != RM_EOF)
     {
         rbfm->printRecord(attrs, returnedData);
     }
-    rsi.close();
+    rmsi.close();
 
     free(returnedData);
     cout<<"** Test case 16 is over"<<endl;
@@ -52,13 +45,6 @@ int main()
 {
     // NOTE: your Tables table must be called "Tables"
     string catalog_table_name = "Tables";
-
-    cout << endl << "Test Catalog Information .." << endl;
-
-    // Test Catalog Information
-    TEST_RM_16(catalog_table_name);
-
-    catalog_table_name = "Columns";
 
     cout << endl << "Test Catalog Information .." << endl;
 

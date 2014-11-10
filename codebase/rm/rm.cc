@@ -494,6 +494,11 @@ RelationManager::RelationManager()
 {
 	_rbfm = RecordBasedFileManager::instance();
 
+	//setup the other class data-member(s)
+	_nextTableId = (
+			CATALOG_COLUMN_ID > CATALOG_TABLE_ID ?
+					CATALOG_COLUMN_ID : CATALOG_TABLE_ID) + 1;
+
 	//check if catalog from prior execution already exists.
 	FileHandle catalogOfTables, catalogOfColumns;
 
@@ -552,6 +557,8 @@ RelationManager::RelationManager()
 
 		insertElementsFromTableIntoMap(catalogOfColumns, column);
 
+		_nextTableId = _catalogTable.size() + 1;
+
 		//debugging
 		/*map<int, vector<ColumnInfo> >::iterator columnMapIter = _catalogColumn.begin();
 		 for( ; columnMapIter != _catalogColumn.end(); columnMapIter++ )
@@ -566,11 +573,6 @@ RelationManager::RelationManager()
 		 std::flush(std::cout);
 		 }*/
 	}
-
-	//setup the other class data-member(s)
-	_nextTableId = (
-			CATALOG_COLUMN_ID > CATALOG_TABLE_ID ?
-					CATALOG_COLUMN_ID : CATALOG_TABLE_ID) + 1;
 
 	//debugging
 	//std::cout << "Tables:" << endl;
@@ -629,11 +631,17 @@ RC RelationManager::printTable(const string& tableName) {
 
 	//print entries from catalog maps
 	//table catalog map
-	std::map<string, TableInfo>::iterator catTableIter = _catalogTable.find(
-			tableName);
+	std::map<string, TableInfo>::iterator catTableIter = _catalogTable.begin(), catTableEnd = _catalogTable.end();
+
+	cout << "catalog Table" << endl;
+	for( ; catTableIter != catTableEnd; catTableIter++ )
+	{
+		cout << "id: " << catTableIter->second._id << " => name: " << catTableIter->first << "\trid: " << catTableIter->second._rid.pageNum << " , " << catTableIter->second._rid.slotNum << endl;
+	}
+	cout << endl;
 
 	///check that table entry is inside table map
-	if (catTableIter == _catalogTable.end()) {
+	/*if (catTableIter == _catalogTable.end()) {
 		//fail
 		_rbfm->closeFile(tableHandle);
 		free(data);
@@ -649,11 +657,22 @@ RC RelationManager::printTable(const string& tableName) {
 			<< catTableIter->second._name << ", rid = { "
 			<< catTableIter->second._rid.pageNum << ", "
 			<< catTableIter->second._rid.slotNum << " }" << std::endl;
-
+*/
 	//column catalog map
-	std::map<int, std::vector<ColumnInfo> >::iterator catColumnIter =
-			_catalogColumn.find(id);
+	std::map<int, std::vector<ColumnInfo> >::iterator catColumnIter = _catalogColumn.begin(), catColumnEnd = _catalogColumn.end();
 
+	cout << "catalog Column" << endl;
+	for( ; catColumnIter != catColumnEnd; catColumnIter++ )
+	{
+		cout << "id: " << catColumnIter->first << endl;
+		std::vector<ColumnInfo>::iterator k = catColumnIter->second.begin(), k_max = catColumnIter->second.end();
+		for( ; k != k_max; k++ )
+		{
+			cout << "\tname: " << k->_name << " ;length: " << k->_length << " ;type: " << k->_type << " ;rid: " << k->_rid.pageNum << " , " << k->_rid.slotNum << endl;
+		}
+	}
+	cout << endl;
+/*
 	//check that table entry is inside column map
 	if (catColumnIter == _catalogColumn.end()) {
 		//fail
@@ -673,7 +692,7 @@ RC RelationManager::printTable(const string& tableName) {
 				<< vecIter->_length << ", type: " << vecIter->_type
 				<< ", rid: {" << vecIter->_rid.pageNum << ", "
 				<< vecIter->_rid.slotNum << "}";
-	}
+	}*/
 
 	//deallocate buffer
 	free(data);

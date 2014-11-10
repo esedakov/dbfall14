@@ -133,7 +133,14 @@ RC PagedFileManager::createFileHeader(const char * fileName)
 	}
 
 	//write back that this file has number of pages = 1
-	//fileHandle.writeBackNumOfPages();	//now PFM closeFile has this function
+	fileHandle.writeBackNumOfPages();	//moved out from closeFile, since PFM test case # 5 was failing
+										//	reason: PFM functions read/close/append has no understanding of the file headers, so they
+										//			should not alter these attributes. When close was calling writeBackNumOfPages it
+										//			was breaking this agreement - so it was overwriting the data in the data page # 0,
+										//			with the intention to update number of pages in the file. But test case # 5, does
+										//			not require any page headers. In fact, it was storing data in the page # 0. When this
+										//			function (writeBackNumOfPages) was called it was overwriting the data, which caused
+										//			Memcmp to fail...
 
 	//close file
 	errCode = closeFile(fileHandle);
@@ -554,9 +561,6 @@ RC PagedFileManager::closeFile(FileHandle &fileHandle)
 	{
 		return -9;
 	}
-
-	//write the number of pages back to the header
-	fileHandle.writeBackNumOfPages();
 
 	//decrement "file open instance" counter
 	(fileHandle._info->_numOpen)--;

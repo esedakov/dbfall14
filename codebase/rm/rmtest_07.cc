@@ -75,7 +75,7 @@ void TEST_RM_7(const string &tableName)
         free(tuples[i]);
     }
     return;
- }
+}
 
 
 int main()

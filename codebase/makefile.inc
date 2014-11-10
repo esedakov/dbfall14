@@ -1,5 +1,5 @@
 ## For students: change this path to the root of your code
-CODEROOT = "/home/joel/workspace/dbfall14/codebase"
+CODEROOT = "/home/esedakov/test/codebase"
 
 #CC = gcc
 CC = g++
