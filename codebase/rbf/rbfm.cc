@@ -100,6 +100,9 @@ RC RecordBasedFileManager::openFile(const string &fileName, FileHandle &fileHand
 		return errCode;
 	}
 
+	//added
+		//printFile(fileHandle);
+
     //success => return 0
 	return errCode;
 }
@@ -117,6 +120,9 @@ RC RecordBasedFileManager::closeFile(FileHandle &fileHandle) {
 										//			not require any page headers. In fact, it was storing data in the page # 0. When this
 										//			function (writeBackNumOfPages) was called it was overwriting the data, which caused
 										//			Memcmp to fail...
+
+	//added
+		//printFile(fileHandle);
 
 	//close a file
 	if( (errCode = _pfm->closeFile( fileHandle )) != 0 )
@@ -247,6 +253,9 @@ RC RecordBasedFileManager::findRecordSlot(FileHandle &fileHandle, PageNum pagenu
 
 	//deallocate data
 	free(data);
+
+	//added
+		//printFile(fileHandle);
 
 	//return success
 	return errCode;
@@ -502,6 +511,9 @@ RC RecordBasedFileManager::insertRecord(FileHandle &fileHandle, const vector<Att
 	rid.pageNum = datapagenum;
 	rid.slotNum = slotNum;
 
+	//added
+		//printFile(fileHandle);
+
 	//success return 0
 	return 0;
 }
@@ -616,6 +628,9 @@ RC RecordBasedFileManager::readRecord(FileHandle &fileHandle, const vector<Attri
 	//decode record
 	unsigned int decodedSz = 0;
 	decodeRecord(recordDescriptor, encDataRecord, decodedSz, data);
+
+	//added
+		//printFile(fileHandle);
 
 	return errCode;
 }
@@ -901,6 +916,9 @@ RC RecordBasedFileManager::deleteRecord(FileHandle &fileHandle, const vector<Att
 	//free data page
 	free(dataPage);
 
+	//added
+		//printFile(fileHandle);
+
 	//return success
 	return errCode;
 }
@@ -1068,6 +1086,9 @@ RC RecordBasedFileManager::updateRecord(FileHandle &fileHandle, const vector<Att
 	free(dataPage);
 	free(encRecordData);
 
+	//added
+		//printFile(fileHandle);
+
 	//return success
 	return errCode;
 }
@@ -1159,6 +1180,9 @@ RC RecordBasedFileManager::readAttribute(FileHandle &fileHandle, const vector<At
 				//free the used buffer
 				free(recordBuf);
 
+				//added
+					//printFile(fileHandle);
+
 				//success
 				return 0;
 			}
@@ -1196,6 +1220,9 @@ RC RecordBasedFileManager::readAttribute(FileHandle &fileHandle, const vector<At
 
 	//free record buffer
 	free(recordBuf);
+
+	//added
+		//printFile(fileHandle);
 
 	//return success/failure
 	return errCode;
@@ -1380,6 +1407,9 @@ RC RecordBasedFileManager::reorganizePage(FileHandle &fileHandle, const vector<A
 	//free buffer that was holding a copy of page
 	free(buffer);
 
+	//added
+		//printFile(fileHandle);
+
 	//return success
 	return errCode;
 }
@@ -1558,6 +1588,9 @@ RC RecordBasedFileManager::reorganizeFile(FileHandle &fileHandle, const vector<A
 	//free buffers used for encoded and decoded data
 	free(encData);
 	//free(decodedData);
+
+	//added
+		//printFile(fileHandle);
 
 	return errCode;
 

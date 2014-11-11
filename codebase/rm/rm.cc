@@ -579,7 +579,7 @@ RelationManager::RelationManager()
 	//printTable(CATALOG_TABLE_NAME);
 	//std::cout << "\nColumns:" << endl;
 	//printTable(CATALOG_COLUMN_NAME);
-	std::cout << endl;
+	//std::cout << endl;
 }
 
 RC RelationManager::printTable(const string& tableName) {

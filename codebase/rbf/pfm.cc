@@ -367,6 +367,8 @@ RC PagedFileManager::getDataPage(FileHandle &fileHandle, const unsigned int reco
 	void* dataPage = malloc(PAGE_SIZE);
 	memset(dataPage, 0, PAGE_SIZE);
 
+	unsigned int curPageId = hPage->_numUsedPageIds;
+
 	if( (errCode = insertPage(fileHandle, headerPage, pageNum, dataPage)) != 0 )
 	{
 		//free buffers
@@ -376,32 +378,31 @@ RC PagedFileManager::getDataPage(FileHandle &fileHandle, const unsigned int reco
 		return errCode;
 	}
 
-	//in case of a different header page, need to reassign hPage pointer
-	if( headerPageId != headerPage )
+	if( headerPage != lastHeaderPageId )
+		curPageId = 0;
+
+	//null data (hPage was not changed upto this point, so no need to write it back)
+	memset(data, 0, PAGE_SIZE);
+
+	//read a specified header page
+	if( (errCode = fileHandle.readPage(headerPage, data)) != 0 )
 	{
-		//null data (hPage was not changed upto this point, so no need to write it back)
-		memset(data, 0, PAGE_SIZE);
-
-		//read a specified header page
-		if( (errCode = fileHandle.readPage(headerPage, data)) != 0 )
-		{
-			//deallocate buffer
-			free(data);
-			free(dataPage);
-			//return error code
-			return errCode;
-		}
-
-		//cast it to Header pointer
-		hPage = (Header*)data;
+		//deallocate buffer
+		free(data);
+		free(dataPage);
+		//return error code
+		return errCode;
 	}
 
-	//set free space
-	if( hPage->_arrOfPageIds[hPage->_numUsedPageIds]._numFreeBytes == PAGE_SIZE )
-		hPage->_arrOfPageIds[hPage->_numUsedPageIds]._numFreeBytes -= 2 * sizeof(unsigned int);
-	hPage->_arrOfPageIds[hPage->_numUsedPageIds]._numFreeBytes -= recordSize + sizeof(PageDirSlot);
+	//cast it to Header pointer
+	hPage = (Header*)data;
 
-	freeSpaceLeftInPage = hPage->_arrOfPageIds[hPage->_numUsedPageIds]._numFreeBytes;
+	//set free space
+	if( hPage->_arrOfPageIds[curPageId]._numFreeBytes == PAGE_SIZE )
+		hPage->_arrOfPageIds[curPageId]._numFreeBytes -= 2 * sizeof(unsigned int);
+	hPage->_arrOfPageIds[curPageId]._numFreeBytes -= recordSize + sizeof(PageDirSlot);
+
+	freeSpaceLeftInPage = hPage->_arrOfPageIds[curPageId]._numFreeBytes;
 
 	//write header page
 	fileHandle.writePage(headerPage, data);

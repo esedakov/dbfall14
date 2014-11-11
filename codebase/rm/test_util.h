@@ -17,6 +17,7 @@
 using namespace std;
 
 RelationManager *rm = RelationManager::instance();
+RecordBasedFileManager *rbfm = RecordBasedFileManager::instance();
 const int success = 0;
 
 void memProfile()
