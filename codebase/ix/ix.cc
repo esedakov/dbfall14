@@ -2,6 +2,10 @@
 #include "ix.h"
 #include <iostream>
 #include <stdlib.h>
+//#include <functional>
+//consult with: http://stackoverflow.com/questions/9848692/c-stl-hash-compilation-issues
+#include <tr1/functional>
+#include <cmath>
 
 /*
  * error code:
@@ -239,6 +243,9 @@ RC IndexManager::openFile(const string &fileName, IXFileHandle &ixFileHandle)	//
 		it = resultOfInsertion.first;
 	}
 
+	//place infoIndex into IX file handler
+	ixFileHandle._info = &(it->second);
+
 	//assign index attributes
 	it->second.N = *( ((unsigned int*)data) + 0 );
 	it->second.Level = *( ((unsigned int*)data) + 1 );
@@ -291,17 +298,105 @@ RC IndexManager::closeFile(IXFileHandle &ixfileHandle)	//NOT TESTED
 
 RC IndexManager::insertEntry(IXFileHandle &ixfileHandle, const Attribute &attribute, const void *key, const RID &rid)
 {
-	return -1;
+	RC errCode = 0;
+
+	//assume that file handle, attribute, key, and rid are correct
+
+	//hashed key
+	unsigned int hkey = hash_at_specified_level(ixfileHandle._info->Level, hash(attribute, key));
+
+	//TODO:
+	//	=> find a primary bucket
+	//	   determine if there is a space left in it (assume if overflow page exist, then the primary page is completely full)
+	//												(also, if there are several overflow pages, then all except the last will be full, too)
+	//	=> if primary page is full OR the last overflow page is full => perform SPLIT
+	//		~ split bucket pointed by Next
+	//		~ add a page to the primary bucket file to represent a new "image" bucket
+	//		~ if
+	//			Next == ( (N * 2^Level) - 1 ):
+	//			+ set Next = 0
+	//			+ Level++
+	//		  else
+	//			+ Next++
+	//	=> in case of split
+	//		~ if
+	//			NEXT-1 == our bucket
+	//			+ then we need to choose between two buckets and then again choose the page
+	//		  else
+	//			+ add overflow page (add record to meta-data file AND a page to the overflow-file if there is no vacant page, left from the previous deletions)
+	//	=> insert <key, rid> record into the page (primary or overflow)
+	//		~ keep in mind that the tuples are sorted through out the primary and overflow pages, so insert into appropriate spot (shift the later records by 1)
+
+	//success
+	return errCode;
 }
 
 RC IndexManager::deleteEntry(IXFileHandle &ixfileHandle, const Attribute &attribute, const void *key, const RID &rid)
 {
-	return -1;
+	RC errCode = 0;
+
+	//assume that file handle, attribute, key, and rid are correct
+
+	//hashed key
+	unsigned int hkey = hash_at_specified_level(ixfileHandle._info->Level, hash(attribute, key));
+
+	//TODO:
+	/*
+	 *	=> find page (primary bucket page or overflow page) that has the given key
+	 * 		~ use binary search to determine where the entry stored
+	 *	=> remove the entry
+	 *	=> if the given page becomes free, then
+	 *		~ if this is an overflow page => remove the record about this page from the meta-data file (PFM does not provide ability to remove pages, so leave the page)
+	 *		~ if this is a primary page
+	 *			+ if it's bucket number == (N * 2^Level) - 1 (I am not 100% sure about correctness of this step, please check me!!!)
+	 *				-> merge the bucket with its image
+	 *				   but that will not change anything,
+	 *				   since one of the merging buckets
+	 *				   is empty (the bucket that is to be removed)!
+	 *			+ Level--
+	 *			+ if Next == 0
+	 *				-> Next = (N * 2^Level) / 2 - 1
+	 *			  else
+	 *			  	-> Next--
+	**/
+
+	//success
+	return errCode;
 }
 
+//consult with: http://stackoverflow.com/questions/9848692/c-stl-hash-compilation-issues
 unsigned IndexManager::hash(const Attribute &attribute, const void *key)
 {
-	return 0;
+	//result is stored inside this variable
+	unsigned int hashed_key = 0;
+
+	//depending on the type of the key, use a different std::hash
+	switch(attribute.type)
+	{
+	case TypeInt:
+		std::tr1::hash<int> hash_int_fn;
+		hashed_key = hash_int_fn(*(int*)key);
+		break;
+	case TypeReal:
+		std::tr1::hash<float> hash_real_fn;
+		hashed_key = hash_real_fn(*(float*)key);
+		break;
+	case TypeVarChar:
+		std::tr1::hash<std::string> hash_str_fn;
+		char* carr = (char*)key + 4;
+		std::string str = std::string(carr);
+		hashed_key = hash_str_fn(str);
+		break;
+	}
+
+	//success
+	return hashed_key;
+}
+
+unsigned int IndexManager::hash_at_specified_level(const int level, const unsigned int hashed_key)
+{
+	//take a modulo
+	return hashed_key % (int)( pow((double)2.0, level) );
 }
 
 RC IndexManager::printIndexEntriesInAPage(IXFileHandle &ixfileHandle, const unsigned &primaryPageNumber) 
@@ -363,7 +458,7 @@ RC IX_ScanIterator::close()
 
 
 IXFileHandle::IXFileHandle()
-: readPageCounter(0), writePageCounter(0), appendPageCounter(0)
+: _info(NULL), readPageCounter(0), writePageCounter(0), appendPageCounter(0)
 {
 }
 

@@ -72,6 +72,8 @@ class IndexManager {
   // Generate and return the hash value (unsigned) for the given key
   unsigned hash(const Attribute &attribute, const void *key);
   
+  unsigned hash_at_specified_level(const int level, const unsigned int hashed_key);
+
   
   // Print all index entries in a primary page including associated overflow pages
   // Format should be:
@@ -123,6 +125,7 @@ public:
 	FileHandle _metaDataFileHandler;
 	FileHandle _primBucketDataFileHandler;
 	FileHandle _overBucketDataFileHandler;
+	indexInfo* _info;
     
 private:
     unsigned readPageCounter;
