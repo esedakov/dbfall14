@@ -9,6 +9,25 @@
 
 IndexManager *indexManager;
 
+void test(IXFileHandle fileHandle)
+{
+	unsigned int i = 0;
+	for( ; i < 1023; i++ )
+	{
+		unsigned int key = i % 10;
+		BucketDataEntry me = (BucketDataEntry){key, (RID){i / 10 + 1, i}};
+		MetaDataSortedEntries mdse(fileHandle, 1, (unsigned int)key, (void*)&me);
+		mdse.insertEntry();
+
+		//print file
+		if( i % 510 == 0 || i % 511 == 0 )
+		{
+			flush(std::cout);
+			printFile(fileHandle._metaDataFileHandler);
+		}
+	}
+}
+
 int testCase_1(const string &indexFileName)
 {
     // Functions tested
@@ -49,6 +68,8 @@ int testCase_1(const string &indexFileName)
         cout << "Failed Opening Index File..." << endl;
         return fail;
     }
+
+    test(ixfileHandle);
 
     //add by me
 	std::cout << "meta file:" << endl << endl;
@@ -136,6 +157,15 @@ int main()
 {
     //Global Initializations
     indexManager = IndexManager::instance();
+
+    //added by me
+    Attribute attr = (Attribute){"field-name", AttrType(2), 100};
+    void* key = malloc(7);	//[length:4]['a':1]['b':1]['c':1] => 7 characters
+    ((unsigned int*)key)[0] = 3;
+    ((char*)key)[4] = 'a';
+    ((char*)key)[5] = 'b';
+    ((char*)key)[6] = 'c';
+    indexManager->hash(attr, key);
 
 	const string indexFileName = "age_idx";
 

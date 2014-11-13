@@ -8,6 +8,8 @@
 
 # define IX_EOF (-1)  // end of the index scan
 
+typedef unsigned int BUCKET_NUMBER;
+
 class IX_ScanIterator;
 class IXFileHandle;
 
@@ -16,6 +18,7 @@ struct indexInfo
 	unsigned int N;
 	unsigned int Level;
 	unsigned int Next;
+	map<BUCKET_NUMBER, map<int, PageNum> > _overflowPageIds;
 	indexInfo()
 	: N(0), Level(0), Next(0)
 	{};
@@ -85,7 +88,7 @@ class IndexManager {
   // # of entries : ??
   // entries: [xx] [xx] [xx] [xx] [xx]
   // where [xx] shows each entry.
-  RC printIndexEntriesInAPage(IXFileHandle &ixfileHandle, const unsigned &primaryPageNumber);
+  RC printIndexEntriesInAPage(IXFileHandle &ixfileHandle, const Attribute &attribute, const unsigned &primaryPageNumber);
   
   // Get the number of primary pages
   RC getNumberOfPrimaryPages(IXFileHandle &ixfileHandle, unsigned &numberOfPrimaryPages);
@@ -137,5 +140,57 @@ private:
 // print out the error message for a given return code
 void IX_PrintError (RC rc);
 
+enum FileHandleInUse
+{
+	PRIMARY = 0,
+	OVERFLOW = 1,
+	METADATA = 2
+};
+
+struct MetaDataEntry
+{
+	unsigned int _bucket_number;
+	PageNum _overflow_page_number;
+	unsigned int _order;
+};
+#define SZ_OF_META_ENTRY sizeof(MetaDataEntry)
+#define MAX_META_ENTRIES_IN_PAGE ( (PAGE_SIZE - sizeof(unsigned int)) / SZ_OF_META_ENTRY )
+
+struct BucketDataEntry
+{
+	unsigned int _key;
+	RID _rid;
+};
+#define SZ_OF_BUCKET_ENTRY sizeof(BucketDataEntry)
+#define MAX_BUCKET_ENTRIES_IN_PAGE ( (PAGE_SIZE - sizeof(unsigned int) * 2) / SZ_OF_BUCKET_ENTRY )
+
+//class provides utilities for inserting and removing entries, while maintaining order
+//used for both meta-data entries <bucket-number, overflow page id> AND
+//	bucket data (primary+overflow) entries <key, RID>
+class MetaDataSortedEntries
+{
+public:
+	MetaDataSortedEntries(IXFileHandle ixfilehandle, BUCKET_NUMBER bucket_number, unsigned int key, const void* entry);
+	~MetaDataSortedEntries();
+	void insertEntry();
+	bool searchEntry(RID& position, BucketDataEntry& entry);
+	bool deleteEntry();
+protected:
+	int searchEntryInPage(RID& result, int indexStart, int indexEnd);
+	bool searchEntryInArrayOfPages(RID& position, PageNum start, PageNum end);
+	RC getPage();
+	void addPage();
+	unsigned int numOfPages();
+private:
+	//general purpose data-members
+	IXFileHandle _ixfilehandle;
+	unsigned int _key;
+	const void* _entryData;
+	int _curPageNum;
+	void* _curPageData;
+	//FileHandleInUse _whichFileHandle;
+	//specific for bucket data entry
+	BUCKET_NUMBER _bktNumber;
+};
 
 #endif
