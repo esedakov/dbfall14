@@ -716,30 +716,9 @@ void IX_PrintError (RC rc)
 
 //functions for the SortedEntries class
 MetaDataSortedEntries::MetaDataSortedEntries(IXFileHandle ixfilehandle, BUCKET_NUMBER bucket_number, unsigned int key, const void* entry)
-: _ixfilehandle(ixfilehandle), _key(key), _entryData(entry), _curPageNum(1), _curPageData(malloc(PAGE_SIZE)), _bktNumber(bucket_number)
+: _ixfilehandle(ixfilehandle), _key(key), _entryData(entry), _curPageNum(0), _curPageData(malloc(PAGE_SIZE)), _bktNumber(bucket_number)
 {
-	RC errCode = 0;
-	//explanation why curPage = 2
-	//	bucket (primary/overflow) data page structure:
-	//	0th page is PFM header
-	//	1nd and further pages contain list of tuples
-	/*if( _ixfilehandle._metaDataFileHandler._info->_numPages < 2 )
-	{
-		memset(_curPageData, 0, PAGE_SIZE);
-		if( (errCode = _ixfilehandle._metaDataFileHandler.appendPage(_curPageData)) != 0 )
-		{
-			IX_PrintError(errCode);
-			exit(errCode);
-		}
-	}
-	else
-	{
-		if( (errCode = _ixfilehandle._metaDataFileHandler.readPage(_curPageNum, _curPageData)) != 0 )
-		{
-			IX_PrintError(errCode);
-			exit(errCode);
-		}
-	}*/
+	getPage();
 }
 
 void MetaDataSortedEntries::addPage()
@@ -771,6 +750,9 @@ void MetaDataSortedEntries::addPage()
 		//insert an entry corresponding to this bucket number
 		_ixfilehandle._info->_overflowPageIds.insert( std::pair<BUCKET_NUMBER, std::map<int, unsigned int> >(_bktNumber, std::map<int, unsigned int>()) );
 	}
+
+	//insert an entry
+	_ixfilehandle._info->_overflowPageIds[_bktNumber].insert( std::pair<int, unsigned int>(newOrderValue, dataPageId) );
 }
 
 RC MetaDataSortedEntries::getPage()
@@ -792,7 +774,7 @@ RC MetaDataSortedEntries::getPage()
 		//determine which page to load
 
 		//first check whether the page exists inside overflow file (i.e. is virtual page points beyond the file)
-		if( _curPageNum >= _ixfilehandle._info->_overflowPageIds[_bktNumber].size() )
+		if( (unsigned int)_curPageNum >= _ixfilehandle._info->_overflowPageIds[_bktNumber].size() )
 		{
 			return -42;	//accessing a page beyond bucket's data
 		}
@@ -845,7 +827,7 @@ bool MetaDataSortedEntries::searchEntry(RID& position, BucketDataEntry& entry)
 		return false;	//failure
 
 	//copy result
-	memcpy(&entry, &((BucketDataEntry*)_curPageData)[position.slotNum], SZ_OF_BUCKET_ENTRY);
+	memcpy(&entry, (BucketDataEntry*)((char*)_curPageData + 2 * sizeof(unsigned int) + position.slotNum * SZ_OF_BUCKET_ENTRY), SZ_OF_BUCKET_ENTRY);
 
 	//success
 	return success_flag;
@@ -884,7 +866,7 @@ int MetaDataSortedEntries::searchEntryInPage(RID& result, int indexStart, int in
 	return 0;	//0 means that the item is found in this page
 }
 
-bool MetaDataSortedEntries::searchEntryInArrayOfPages(RID& position, PageNum start, PageNum end)
+bool MetaDataSortedEntries::searchEntryInArrayOfPages(RID& position, int start, int end)
 {
 	bool success_flag = false;
 
@@ -946,7 +928,7 @@ bool MetaDataSortedEntries::searchEntryInArrayOfPages(RID& position, PageNum sta
 
 void MetaDataSortedEntries::insertEntry()
 {
-	RID position;
+	RID position = (RID){0, 0};
 	RC errCode = 0;
 
 	int maxPages = numOfPages();
@@ -956,22 +938,22 @@ void MetaDataSortedEntries::insertEntry()
 
 	_curPageNum = position.pageNum;
 
-	//shift file data that
 	//"allocate space for new entry" by shifting the data (to the "right" of the found position) by a size of of meta-data entry
 
 	//since there could be duplicates, we need to find the "right-most" entry with this data
 	unsigned int numOfEntriesInPage = ((unsigned int*)_curPageData)[0];
-	if( position.slotNum <= numOfEntriesInPage )	//of course, providing that this page has some entries
+	if( position.slotNum < numOfEntriesInPage )	//of course, providing that this page has some entries
 	{
 		//keep looping while finding duplicates (i.e. entries with the same key, with the assumption of different RIDs)
-		while( ((BucketDataEntry*)_curPageData)[position.slotNum]._key <= _key )
+		//while( ((BucketDataEntry*)_curPageData)[position.slotNum]._key <= _key )
+		while( ((BucketDataEntry*)((char*)_curPageData + 2 * sizeof(unsigned int) + position.slotNum * SZ_OF_BUCKET_ENTRY))->_key <= _key )
 		{
 			position.slotNum++;
 			//if we go beyond the page boundaries then, go to the next page
-			if( position.slotNum > numOfEntriesInPage )
+			if( position.slotNum >= numOfEntriesInPage )
 			{
 				//check if next page exists
-				if( position.pageNum + 1 >= maxPages )
+				if( position.pageNum + 1 >= (unsigned int)maxPages )
 				{
 					break;
 				}
@@ -981,7 +963,7 @@ void MetaDataSortedEntries::insertEntry()
 				_curPageNum = position.pageNum;
 
 				//reset slot number
-				position.slotNum = 1;
+				position.slotNum = 0;
 
 				//read in the page
 				if( (errCode = getPage()) != 0 )
@@ -1021,7 +1003,7 @@ void MetaDataSortedEntries::insertEntry()
 	bool newPage = false;
 
 	//loop thru array of pages, starting from the one where position was found by the search function
-	for( PageNum pageNum = _curPageNum; pageNum < maxPages; pageNum++ )
+	for( int pageNum = _curPageNum; pageNum < maxPages; pageNum++ )
 	{
 		//read the current page
 		if( pageNum != _curPageNum )
@@ -1053,7 +1035,7 @@ void MetaDataSortedEntries::insertEntry()
 		int size = 0;
 
 		//determine the start index = either the position found (for the first page) OR slot number # 1 (for all further pages)
-		if( pageNum == (int)position.pageNum )
+		if( pageNum == position.pageNum )
 			start = position.slotNum;	//first page
 		else
 			start = 1;	//middle or last page
@@ -1073,7 +1055,7 @@ void MetaDataSortedEntries::insertEntry()
 		//                   *--------------------* => no entry is necessary for shifting, since after the shift there is still space in this page
 		// number of elements to shift is (16 - 1) - 7 = 15 - 7 = 8
 		//size = ((unsigned int*)_curPageData)[0] + ( ((unsigned int*)_curPageData)[0] == MAX_META_ENTRIES_IN_PAGE ? 0 : 1 ) - start;
-		size = ((unsigned int*)_curPageData)[0] - 1 - start;
+		size = ((unsigned int*)_curPageData)[0] - ( ((unsigned int*)_curPageData)[0] == MAX_BUCKET_ENTRIES_IN_PAGE ? 1 : 0 ) - start;
 
 		if( size > 0 )
 		{
@@ -1115,12 +1097,30 @@ void MetaDataSortedEntries::insertEntry()
 		if( newPage == false )
 			((unsigned int*)_curPageData)[0]++;
 
-		//write back the page
-		if( (errCode = _ixfilehandle._metaDataFileHandler.writePage(pageNum, _curPageData)) != 0 )
+		//write back the page to an appropriate file
+		if( _curPageNum == 0 )
 		{
-			IX_PrintError(errCode);
-			exit(errCode);
+			//write page to "primary file"
+			if( (errCode = _ixfilehandle._primBucketDataFileHandler.writePage(_bktNumber + 1, _curPageData)) != 0 )
+			{
+				IX_PrintError(errCode);
+				exit(errCode);
+			}
 		}
+		else
+		{
+			//write page to "overflow file"
+
+			//determine physical page number
+			PageNum actualPageNumber = _ixfilehandle._info->_overflowPageIds[_bktNumber][_curPageNum];
+
+			if( (errCode = _ixfilehandle._overBucketDataFileHandler.writePage(actualPageNumber, _curPageData)) != 0 )
+			{
+				IX_PrintError(errCode);
+				exit(errCode);
+			}
+		}
+
 	}
 
 	if( newPage )

@@ -20,10 +20,14 @@ void test(IXFileHandle fileHandle)
 		mdse.insertEntry();
 
 		//print file
-		if( i % 510 == 0 || i % 511 == 0 )
+		if( i % 339 == 0 || i % 340 == 0 || i % 341 == 0 )
 		{
-			flush(std::cout);
+			std::cout << endl << "meta data file:" << endl;
 			printFile(fileHandle._metaDataFileHandler);
+			std::cout << endl << "primary data file:" << endl;
+			printFile(fileHandle._primBucketDataFileHandler);
+			std::cout << endl << "overflow data file:" << endl;
+			printFile(fileHandle._overBucketDataFileHandler);
 		}
 	}
 }

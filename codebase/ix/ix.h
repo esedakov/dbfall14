@@ -177,7 +177,7 @@ public:
 	bool deleteEntry();
 protected:
 	int searchEntryInPage(RID& result, int indexStart, int indexEnd);
-	bool searchEntryInArrayOfPages(RID& position, PageNum start, PageNum end);
+	bool searchEntryInArrayOfPages(RID& position, int start, int end);
 	RC getPage();
 	void addPage();
 	unsigned int numOfPages();
