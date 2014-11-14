@@ -15,20 +15,18 @@ void test(IXFileHandle fileHandle)
 	for( ; i < 1023; i++ )
 	{
 		unsigned int key = i % 10;
-		BucketDataEntry me = (BucketDataEntry){key, (RID){i / 10 + 1, i}};
+		BucketDataEntry me = (BucketDataEntry){key, (RID){i / 10 + 1, (unsigned int)'A'}};
 		MetaDataSortedEntries mdse(fileHandle, 1, (unsigned int)key, (void*)&me);
 		mdse.insertEntry();
 
 		//print file
-		if( i % 339 == 0 || i % 340 == 0 || i % 341 == 0 )
+		/*if( i % 339 == 0 || i % 340 == 0 || i % 680 == 0 )
 		{
-			std::cout << endl << "meta data file:" << endl;
-			printFile(fileHandle._metaDataFileHandler);
 			std::cout << endl << "primary data file:" << endl;
 			printFile(fileHandle._primBucketDataFileHandler);
 			std::cout << endl << "overflow data file:" << endl;
 			printFile(fileHandle._overBucketDataFileHandler);
-		}
+		}*/
 	}
 }
 
@@ -74,6 +72,18 @@ int testCase_1(const string &indexFileName)
     }
 
     test(ixfileHandle);
+
+    std::cout << endl << "primary data file:" << endl;
+	printFile(ixfileHandle._primBucketDataFileHandler);
+	std::cout << endl << "overflow data file:" << endl;
+	printFile(ixfileHandle._overBucketDataFileHandler);
+
+    if( (rc = indexManager->closeFile(ixfileHandle)) != 0 )
+    	cout << "error: " << rc;
+	if( (rc = indexManager->openFile(indexFileName, ixfileHandle)) != 0 )
+		cout << "error: " << rc;
+	std::cout << endl << "meta data file:" << endl;
+	printFile(ixfileHandle._metaDataFileHandler);
 
     //add by me
 	std::cout << "meta file:" << endl << endl;

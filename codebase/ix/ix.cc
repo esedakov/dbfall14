@@ -83,6 +83,17 @@ RC IndexManager::createFile(const string &fileName, const unsigned &numberOfPage
 
 	PageNum headerPageId = 0, dataPageId = 0;
 
+	//find the last header, and insert "data page" in this header
+	if( (errCode = _pfm->getLastHeaderPage(handle._metaDataFileHandler, headerPageId)) != 0 )
+	{
+		//close file
+		_pfm->closeFile(handle._metaDataFileHandler);
+		//deallocate buffer
+		free(data);
+		//return error code
+		return errCode;
+	}
+
 	//write in a second page that will store meta-data header
 	//if( (errCode = handle._metaDataFileHandler.appendPage(data)) != 0 )
 	if( (errCode = _pfm->insertPage(handle._metaDataFileHandler, headerPageId, dataPageId, data)) != 0 )
@@ -261,7 +272,7 @@ RC IndexManager::openFile(const string &fileName, IXFileHandle &ixFileHandle)	//
 			//\____________________________/\______________________________________/\______________________________________/
 			//              4                              12=3*4                                      12
 			//iterate over the overflow tuples
-			int tupleIndex = 0;
+			unsigned int tupleIndex = 0;
 			for( ; tupleIndex < ((unsigned int*)metaPageData)[0]; tupleIndex++ )
 			{
 				MetaDataEntry* ptrEntry = (MetaDataEntry*)((char*)metaPageData + sizeof(unsigned int) + tupleIndex * sizeof(MetaDataEntry));
@@ -325,6 +336,8 @@ RC IndexManager::closeFile(IXFileHandle &ixfileHandle)	//NOT TESTED
 	//keep the counter of the meta data record within the current page
 	unsigned int curMetaEntryIndex = 0;
 
+	bool needToSave = false;
+
 	//buffer for meta-data pages that store list of (overflow) page IDs
 	void* buffer = malloc(PAGE_SIZE);
 	memset(buffer, 0, PAGE_SIZE);
@@ -345,7 +358,16 @@ RC IndexManager::closeFile(IXFileHandle &ixfileHandle)	//NOT TESTED
 				{
 					//append a page
 					//if( (errCode = ixfileHandle._metaDataFileHandler.appendPage(buffer)) != 0 )
-					unsigned int headerPageId, dataPageId;
+					unsigned int headerPageId = 0, dataPageId = 0;
+
+					if( (errCode = _pfm->getLastHeaderPage(ixfileHandle._metaDataFileHandler, headerPageId)) != 0 )
+					{
+						//deallocate buffer
+						free(buffer);
+						//return error code
+						return errCode;
+					}
+
 					if( (errCode = PagedFileManager::instance()->insertPage(ixfileHandle._metaDataFileHandler, headerPageId, dataPageId, buffer)) != 0 )
 					{
 						free(buffer);
@@ -366,6 +388,9 @@ RC IndexManager::closeFile(IXFileHandle &ixfileHandle)	//NOT TESTED
 				//update counters
 				curMetaPageIndex++;
 				curMetaEntryIndex = 0;
+
+				//just saved the data
+				needToSave = false;
 			}
 
 			//set the meta data entry
@@ -376,11 +401,57 @@ RC IndexManager::closeFile(IXFileHandle &ixfileHandle)	//NOT TESTED
 
 			//update current entry counter
 			curMetaEntryIndex++;
+
+			//altered data, need saving
+			needToSave = true;
+		}
+	}
+
+	//backup (not good coding strategy - code duplication from the loop, if you can please refactor it ...)
+	if( needToSave )
+	{
+		//write the number of elements inside the page (it is the very first integer)
+		((unsigned int*)buffer)[0] = curMetaEntryIndex;
+		//write this page into file
+		//but first determine if the file actually contains this page, if it does not then append a new one with the contents of buffer
+		if( ixfileHandle._metaDataFileHandler._info->_numPages <= curMetaPageIndex )
+		{
+			//append a page
+			//if( (errCode = ixfileHandle._metaDataFileHandler.appendPage(buffer)) != 0 )
+			unsigned int headerPageId = 0, dataPageId = 0;
+
+			if( (errCode = _pfm->getLastHeaderPage(ixfileHandle._metaDataFileHandler, headerPageId)) != 0 )
+			{
+				//deallocate buffer
+				free(buffer);
+				//return error code
+				return errCode;
+			}
+
+			if( (errCode = PagedFileManager::instance()->insertPage(ixfileHandle._metaDataFileHandler, headerPageId, dataPageId, buffer)) != 0 )
+			{
+				free(buffer);
+				return errCode;
+			}
+		}
+		else
+		{
+			//write the new contents
+			if( (errCode = ixfileHandle._metaDataFileHandler.writePage(curMetaPageIndex, buffer)) != 0 )
+			{
+				free(buffer);
+				return errCode;
+			}
 		}
 	}
 
 	//deallocate buffer
 	free(buffer);
+
+	//for each file handler write back number of pages
+	ixfileHandle._metaDataFileHandler.writeBackNumOfPages();
+	ixfileHandle._overBucketDataFileHandler.writeBackNumOfPages();
+	ixfileHandle._primBucketDataFileHandler.writeBackNumOfPages();
 
 	//close all file handlers
 	if( (errCode = _pfm->closeFile(ixfileHandle._metaDataFileHandler)) != 0 ||
@@ -725,9 +796,17 @@ void MetaDataSortedEntries::addPage()
 {
 	RC errCode = 0;
 
-	unsigned int headerPageId, dataPageId;
+	PagedFileManager* _pfm = PagedFileManager::instance();
+
+	unsigned int headerPageId = 0, dataPageId = 0;
 	//insert page into overflow data file
-	if( (errCode = PagedFileManager::instance()->insertPage(_ixfilehandle._overBucketDataFileHandler, headerPageId, dataPageId, _curPageData)) != 0 )
+	if( (errCode = _pfm->getLastHeaderPage(_ixfilehandle._overBucketDataFileHandler, headerPageId)) != 0 )
+	{
+		IX_PrintError(errCode);
+		exit(errCode);
+	}
+
+	if( (errCode = _pfm->insertPage(_ixfilehandle._overBucketDataFileHandler, headerPageId, dataPageId, _curPageData)) != 0 )
 	{
 		IX_PrintError(errCode);
 		exit(errCode);
@@ -773,14 +852,16 @@ RC MetaDataSortedEntries::getPage()
 		//then, consult with information about overflow page locations stored inside the file handler to
 		//determine which page to load
 
+		PageNum overFlowPageId = _curPageNum - 1;
+
 		//first check whether the page exists inside overflow file (i.e. is virtual page points beyond the file)
-		if( (unsigned int)_curPageNum >= _ixfilehandle._info->_overflowPageIds[_bktNumber].size() )
+		if( overFlowPageId >= _ixfilehandle._info->_overflowPageIds[_bktNumber].size() )
 		{
 			return -42;	//accessing a page beyond bucket's data
 		}
 
 		//get physical overflow page number corresponding to the "virtual page number"
-		actualPageNumber = _ixfilehandle._info->_overflowPageIds[_bktNumber][_curPageNum];
+		actualPageNumber = _ixfilehandle._info->_overflowPageIds[_bktNumber][overFlowPageId];
 
 		//retrieve the data and store in the current buffer
 		if( (errCode = _ixfilehandle._overBucketDataFileHandler.readPage(actualPageNumber, _curPageData)) != 0 )
@@ -971,6 +1052,9 @@ void MetaDataSortedEntries::insertEntry()
 					IX_PrintError(errCode);
 					exit(errCode);
 				}
+
+				//reset number of entries in the page
+				numOfEntriesInPage = ((unsigned int*)_curPageData)[0];
 			}
 		}
 	}
@@ -1008,15 +1092,15 @@ void MetaDataSortedEntries::insertEntry()
 		//read the current page
 		if( pageNum != _curPageNum )
 		{
+			//update current page number
+			_curPageNum = pageNum;
+
 			//read in the page
 			if( (errCode = getPage()) != 0 )
 			{
 				IX_PrintError(errCode);
 				exit(errCode);
 			}
-
-			//update current page number
-			_curPageNum = pageNum;
 		}
 
 		//first read in the item that will be overwritten by the data-shift operation (i.e. last item in this page)
@@ -1035,10 +1119,10 @@ void MetaDataSortedEntries::insertEntry()
 		int size = 0;
 
 		//determine the start index = either the position found (for the first page) OR slot number # 1 (for all further pages)
-		if( pageNum == position.pageNum )
+		if( pageNum == (int)position.pageNum )
 			start = position.slotNum;	//first page
 		else
-			start = 1;	//middle or last page
+			start = 0;	//middle or last page
 
 		//determine number of elements of the moving data
 		//   0 1 2 3 4 5 6  7  8  9 10 11 12 13 14 15 16 17 18 => number of elements=19
@@ -1059,7 +1143,7 @@ void MetaDataSortedEntries::insertEntry()
 
 		if( size > 0 )
 		{
-			if( size + start + 1 == MAX_META_ENTRIES_IN_PAGE )
+			if( size + start + ( ((unsigned int*)_curPageData)[0] == MAX_BUCKET_ENTRIES_IN_PAGE ? 1 : 0 ) == MAX_BUCKET_ENTRIES_IN_PAGE )
 				newPage = true;
 			else
 				newPage = false;
@@ -1072,6 +1156,10 @@ void MetaDataSortedEntries::insertEntry()
 				((char*)_curPageData + 2 * sizeof(unsigned int) + (start + 1) * SZ_OF_BUCKET_ENTRY),
 				((char*)_curPageData + 2 * sizeof(unsigned int) + start * SZ_OF_BUCKET_ENTRY),
 				size * SZ_OF_BUCKET_ENTRY );
+		}
+		else
+		{
+			newPage = false;	//if newPage was inserted in the last iteration, we need to reset it to false during this one
 		}
 
 		//if this is not the page
@@ -1094,7 +1182,7 @@ void MetaDataSortedEntries::insertEntry()
 		shiftingEntry._rid.slotNum = lastEntry._rid.slotNum;
 
 		//increment the number of elements in the last page (all other pages before should have the size equal to maximum already).
-		if( newPage == false )
+		if( newPage == false && ((unsigned int*)_curPageData)[0] < MAX_BUCKET_ENTRIES_IN_PAGE )
 			((unsigned int*)_curPageData)[0]++;
 
 		//write back the page to an appropriate file
@@ -1112,7 +1200,7 @@ void MetaDataSortedEntries::insertEntry()
 			//write page to "overflow file"
 
 			//determine physical page number
-			PageNum actualPageNumber = _ixfilehandle._info->_overflowPageIds[_bktNumber][_curPageNum];
+			PageNum actualPageNumber = _ixfilehandle._info->_overflowPageIds[_bktNumber][_curPageNum - 1];
 
 			if( (errCode = _ixfilehandle._overBucketDataFileHandler.writePage(actualPageNumber, _curPageData)) != 0 )
 			{
