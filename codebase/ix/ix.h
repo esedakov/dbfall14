@@ -174,12 +174,13 @@ public:
 	~MetaDataSortedEntries();
 	void insertEntry();
 	bool searchEntry(RID& position, BucketDataEntry& entry);
-	bool deleteEntry();
+	RC deleteEntry(const RID& rid);
 protected:
 	int searchEntryInPage(RID& result, int indexStart, int indexEnd);
 	bool searchEntryInArrayOfPages(RID& position, int start, int end);
 	RC getPage();
 	void addPage();
+	RC removePageRecord();
 	unsigned int numOfPages();
 private:
 	//general purpose data-members

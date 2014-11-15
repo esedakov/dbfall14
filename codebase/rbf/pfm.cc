@@ -153,7 +153,49 @@ RC PagedFileManager::createFileHeader(const char * fileName)
 	return errCode;
 }
 
-RC PagedFileManager::findHeaderPage(FileHandle fileHandle, PageNum pageId, PageNum& retHeaderPage)
+RC PagedFileManager::getLastHeaderPage(FileHandle& fileHandle, PageNum& lastHeaderPageId)
+{
+	RC errCode = 0;
+
+	lastHeaderPageId = 0;
+
+	//pointer to the header page
+	Header* hPage = NULL;
+
+	//allocate temporary buffer for page
+	void* data = malloc(PAGE_SIZE);
+
+	//loop thru header pages
+	do
+	{
+		//get the first header page
+		if( (errCode = fileHandle.readPage((PageNum)lastHeaderPageId, data)) != 0 )
+		{
+			//deallocate data
+			free(data);
+
+			//return error
+			return errCode;
+		}
+
+		//cast data to Header
+		hPage = (Header*)data;
+
+		if( hPage->_nextHeaderPageId == 0 )
+			break;
+
+		lastHeaderPageId = hPage->_nextHeaderPageId;
+
+	} while(true);
+
+	//deallocate temporary buffer for header page
+	free(data);
+
+	//return error
+	return errCode;
+}
+
+RC PagedFileManager::findHeaderPage(FileHandle& fileHandle, PageNum pageId, PageNum& retHeaderPage)
 {
 	RC errCode = 0;
 
@@ -299,6 +341,9 @@ RC PagedFileManager::getDataPage(FileHandle &fileHandle, const unsigned int reco
 {
 	RC errCode = 0;
 
+	//is for IX functions
+	bool ixDataPage = recordSize == (unsigned int)-1;
+
 	//maintain current header page id and its former value (from past iteration)
 	unsigned int headerPageId = 0, lastHeaderPageId = 0;
 
@@ -335,21 +380,32 @@ RC PagedFileManager::getDataPage(FileHandle &fileHandle, const unsigned int reco
 			PageInfo* pi = &(hPage->_arrOfPageIds[i]);
 
 			//if it has the proper number of free bytes than return information about this page
-			if( pi->_numFreeBytes >= recordSize + sizeof(PageDirSlot) )	//inconsistency found: if amount of free space left in page and requested size are exactly equal than it would skip this candidate page and allocate a new data page, so I changed '>' to '>='
+			if( (ixDataPage == true && pi->_numFreeBytes == (unsigned int)-1) ||
+				(ixDataPage == false && pi->_numFreeBytes >= recordSize + sizeof(PageDirSlot)) )	//inconsistency found: if amount of free space left in page and requested size are exactly equal than it would skip this candidate page and allocate a new data page, so I changed '>' to '>='
 			{
 				//assign id
 				pageNum = pi->_pageid;
 
 				//update free space left
-				pi->_numFreeBytes -= recordSize + sizeof(PageDirSlot);
-
-				freeSpaceLeftInPage = pi->_numFreeBytes;
+				if( ixDataPage )
+				{
+					freeSpaceLeftInPage = 0;
+				}
+				else
+				{
+					pi->_numFreeBytes -= recordSize + sizeof(PageDirSlot);
+					freeSpaceLeftInPage = pi->_numFreeBytes;
+				}
 
 				//assign a header page
 				headerPage = lastHeaderPageId;
 
 				//write header page
-				fileHandle.writePage(headerPage, data);
+				if( (errCode = fileHandle.writePage(headerPage, data)) != 0 )
+				{
+					free(data);
+					return errCode;
+				}
 
 				//deallocate data
 				free(data);
@@ -381,37 +437,47 @@ RC PagedFileManager::getDataPage(FileHandle &fileHandle, const unsigned int reco
 	if( headerPage != lastHeaderPageId )
 		curPageId = 0;
 
-	//null data (hPage was not changed upto this point, so no need to write it back)
-	memset(data, 0, PAGE_SIZE);
-
-	//read a specified header page
-	if( (errCode = fileHandle.readPage(headerPage, data)) != 0 )
+	if( ixDataPage == false )
 	{
-		//deallocate buffer
-		free(data);
-		free(dataPage);
-		//return error code
-		return errCode;
+		//null data (hPage was not changed upto this point, so no need to write it back)
+		memset(data, 0, PAGE_SIZE);
+
+		//read a specified header page
+		if( (errCode = fileHandle.readPage(headerPage, data)) != 0 )
+		{
+			//deallocate buffers
+			free(data);
+			free(dataPage);
+			//return error code
+			return errCode;
+		}
+
+		//cast it to Header pointer
+		hPage = (Header*)data;
+
+		//set free space
+		if( hPage->_arrOfPageIds[curPageId]._numFreeBytes == PAGE_SIZE )
+			hPage->_arrOfPageIds[curPageId]._numFreeBytes -= 2 * sizeof(unsigned int);
+		hPage->_arrOfPageIds[curPageId]._numFreeBytes -= recordSize + sizeof(PageDirSlot);
+
+		freeSpaceLeftInPage = hPage->_arrOfPageIds[curPageId]._numFreeBytes;
+
+		//write header page
+		if( (errCode = fileHandle.writePage(headerPage, data)) != 0 )
+		{
+			//deallocate buffers
+			free(data);
+			free(dataPage);
+			//return error code
+			return errCode;
+		}
 	}
 
-	//cast it to Header pointer
-	hPage = (Header*)data;
-
-	//set free space
-	if( hPage->_arrOfPageIds[curPageId]._numFreeBytes == PAGE_SIZE )
-		hPage->_arrOfPageIds[curPageId]._numFreeBytes -= 2 * sizeof(unsigned int);
-	hPage->_arrOfPageIds[curPageId]._numFreeBytes -= recordSize + sizeof(PageDirSlot);
-
-	freeSpaceLeftInPage = hPage->_arrOfPageIds[curPageId]._numFreeBytes;
-
-	//write header page
-	fileHandle.writePage(headerPage, data);
-
-	//deallocate data(s)
+	//deallocate buffers
 	free(data);
 	free(dataPage);
 
-	//return success, because technically no error occurred
+	//return success
 	return 0;
 }
 
@@ -853,15 +919,15 @@ void printFile(FileHandle& fileHandle)
 
 		for(int j = 0; j < PAGE_SIZE; j++)
 		{
-			char c = ((char*)data)[j];
+			__uint8_t c = ((char*)data)[j];
 
 			if( (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') )
 			{
-				std::cout << c;
+				std::cout << "`" << c;
 			}
 			else
 			{
-				std::cout << (unsigned int)c;
+				std::cout << (char)( ( (c / 16) > 9 ? ('A' - 10) : '0' ) + (c / 16)) << (char)( ( (c % 16) > 9 ? ('A' - 10) : '0' ) + (c % 16));
 			}
 
 			std::cout << " | ";

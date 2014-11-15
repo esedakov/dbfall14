@@ -12,6 +12,9 @@
  * -40 => index map is corrupted
  * -41 => primary bucket has wrong number of pages
  * -42 => accessing page beyond the those that are stored in the given bucket
+ * -43 => attempting to delete index-entry that does not exist
+ * -44 => no overflow page is found in the local map
+ * -45 => could not delete page
  */
 
 IndexManager* IndexManager::_index_manager = 0;
@@ -96,7 +99,17 @@ RC IndexManager::createFile(const string &fileName, const unsigned &numberOfPage
 
 	//write in a second page that will store meta-data header
 	//if( (errCode = handle._metaDataFileHandler.appendPage(data)) != 0 )
-	if( (errCode = _pfm->insertPage(handle._metaDataFileHandler, headerPageId, dataPageId, data)) != 0 )
+	unsigned int freeSpaceLeft = 0;
+	if( (errCode = _pfm->getDataPage(handle._metaDataFileHandler, (unsigned int)-1, dataPageId, headerPageId, freeSpaceLeft)) != 0 )
+	{
+		//close file
+		_pfm->closeFile(handle._metaDataFileHandler);
+		//deallocate buffer
+		free(data);
+		//return error code
+		return errCode;
+	}
+	if( (errCode = handle._metaDataFileHandler.writePage(dataPageId, data)) != 0 )
 	{
 		//close file
 		_pfm->closeFile(handle._metaDataFileHandler);
@@ -131,7 +144,16 @@ RC IndexManager::createFile(const string &fileName, const unsigned &numberOfPage
 	for( unsigned int i = 0; i < numberOfPages; i++ )
 	{
 		//if( (errCode = handle._primBucketDataFileHandler.appendPage(data)) != 0 )
-		if( (errCode = _pfm->insertPage(handle._primBucketDataFileHandler, headerPageId, dataPageId, data)) != 0 )
+		if( (errCode = _pfm->getDataPage(handle._primBucketDataFileHandler, (unsigned int)-1, dataPageId, headerPageId, freeSpaceLeft)) != 0 )
+		{
+			//deallocate buffer
+			free(data);
+			//close primary bucket file
+			_pfm->closeFile(handle._primBucketDataFileHandler);
+			//return error code
+			return errCode;
+		}
+		if( (errCode = handle._primBucketDataFileHandler.writePage(dataPageId, data)) != 0 )
 		{
 			//deallocate buffer
 			free(data);
@@ -342,6 +364,8 @@ RC IndexManager::closeFile(IXFileHandle &ixfileHandle)	//NOT TESTED
 	void* buffer = malloc(PAGE_SIZE);
 	memset(buffer, 0, PAGE_SIZE);
 
+	unsigned int freeSpaceLeft = 0;
+
 	for( ; bucketIter != bucketMax; bucketIter++ )
 	{
 		std::map<int, PageNum>::iterator overflowPageIter = bucketIter->second.begin(), overflowPageMax = bucketIter->second.end();
@@ -368,7 +392,12 @@ RC IndexManager::closeFile(IXFileHandle &ixfileHandle)	//NOT TESTED
 						return errCode;
 					}
 
-					if( (errCode = PagedFileManager::instance()->insertPage(ixfileHandle._metaDataFileHandler, headerPageId, dataPageId, buffer)) != 0 )
+					if( (errCode = _pfm->getDataPage(ixfileHandle._metaDataFileHandler, (unsigned int)-1, dataPageId, headerPageId, freeSpaceLeft)) != 0 )
+					{
+						free(buffer);
+						return errCode;
+					}
+					if( (errCode = ixfileHandle._metaDataFileHandler.writePage(dataPageId, buffer)) != 0 )
 					{
 						free(buffer);
 						return errCode;
@@ -428,7 +457,12 @@ RC IndexManager::closeFile(IXFileHandle &ixfileHandle)	//NOT TESTED
 				return errCode;
 			}
 
-			if( (errCode = PagedFileManager::instance()->insertPage(ixfileHandle._metaDataFileHandler, headerPageId, dataPageId, buffer)) != 0 )
+			if( (errCode = _pfm->getDataPage(ixfileHandle._metaDataFileHandler, (unsigned int)-1, dataPageId, headerPageId, freeSpaceLeft)) != 0 )
+			{
+				free(buffer);
+				return errCode;
+			}
+			if( (errCode = ixfileHandle._metaDataFileHandler.writePage(dataPageId, buffer)) != 0 )
 			{
 				free(buffer);
 				return errCode;
@@ -780,6 +814,15 @@ void IX_PrintError (RC rc)
 	case -42:
 		errMsg = "accessing page beyond the those that are stored in the given bucket";
 		break;
+	case -43:
+		errMsg = "attempting to delete index-entry that does not exist";
+		break;
+	case -44:
+		errMsg = "no overflow page is found in the local map";
+		break;
+	case -45:
+		errMsg ="could not delete page";
+		break;
 	}
 	//print message
 	std::cout << "component: " << compName << " => " << errMsg;
@@ -790,6 +833,93 @@ MetaDataSortedEntries::MetaDataSortedEntries(IXFileHandle ixfilehandle, BUCKET_N
 : _ixfilehandle(ixfilehandle), _key(key), _entryData(entry), _curPageNum(0), _curPageData(malloc(PAGE_SIZE)), _bktNumber(bucket_number)
 {
 	getPage();
+}
+
+RC MetaDataSortedEntries::removePageRecord()
+{
+	//remove record from the overflowPageId map
+	if( _ixfilehandle._info->_overflowPageIds.find(_bktNumber) == _ixfilehandle._info->_overflowPageIds.end() )
+	{
+		//no overflow page is found in the local map
+		return -44;
+	}
+
+	std::map<int, PageNum>::iterator
+		i = _ixfilehandle._info->_overflowPageIds[_bktNumber].begin(),
+		max = _ixfilehandle._info->_overflowPageIds[_bktNumber].end();
+
+	for( ; i != max; i++ )
+	{
+		if( i->second == (unsigned int)_curPageNum )
+		{
+			_ixfilehandle._info->_overflowPageIds[_bktNumber].erase(i);
+			break;
+		}
+	}
+
+	//find header page that contains the record about the data page to be removed
+	PageNum headerPageId = 0;
+
+	RC errCode = 0;
+
+	//pointer to the header page
+	Header* hPage = NULL;
+
+	//allocate temporary buffer for page
+	void* data = malloc(PAGE_SIZE);
+
+	bool found = false;
+
+	//loop thru header pages
+	do
+	{
+		//get the first header page
+		if( (errCode = _ixfilehandle._overBucketDataFileHandler.readPage((PageNum)headerPageId, data)) != 0 )
+		{
+			//deallocate data
+			free(data);
+
+			//return error
+			return errCode;
+		}
+
+		//cast data to Header
+		hPage = (Header*)data;
+
+		//loop thru PageInfo tuples
+		for( unsigned int i = 0; i < NUM_OF_PAGE_IDS; i++ )
+		{
+			if( hPage->_arrOfPageIds[i]._pageid == (unsigned int)_curPageNum )
+			{
+				//found the page record
+				//remove record from the PFM page header
+				hPage->_arrOfPageIds[i]._numFreeBytes = (unsigned int)-1;
+				found = true;
+				//decrease number of pages in the file
+				_ixfilehandle._overBucketDataFileHandler._info->_numPages--;
+				break;
+			}
+		}
+
+		if( found )
+			break;
+
+		//go to next header page
+		headerPageId = hPage->_nextHeaderPageId;
+
+	} while(headerPageId > 0);
+
+	if( found == false )
+	{
+		//have not found the appropriate page
+		return -45;
+	}
+
+	//deallocate temporary buffer for header page
+	free(data);
+
+	//success
+	return 0;
 }
 
 void MetaDataSortedEntries::addPage()
@@ -806,7 +936,14 @@ void MetaDataSortedEntries::addPage()
 		exit(errCode);
 	}
 
-	if( (errCode = _pfm->insertPage(_ixfilehandle._overBucketDataFileHandler, headerPageId, dataPageId, _curPageData)) != 0 )
+	unsigned int freeSpaceLeft = 0;
+
+	if( (errCode = _pfm->getDataPage(_ixfilehandle._overBucketDataFileHandler, (unsigned int)-1, dataPageId, headerPageId, freeSpaceLeft)) != 0 )
+	{
+		IX_PrintError(errCode);
+		exit(errCode);
+	}
+	if( (errCode = _ixfilehandle._overBucketDataFileHandler.writePage(dataPageId, _curPageData)) != 0 )
 	{
 		IX_PrintError(errCode);
 		exit(errCode);
@@ -1007,6 +1144,265 @@ bool MetaDataSortedEntries::searchEntryInArrayOfPages(RID& position, int start, 
 	return success_flag;
 }
 
+RC MetaDataSortedEntries::deleteEntry(const RID& rid)
+{
+	RC errCode = 0;
+
+	RID position = (RID){0, 0};
+
+	int maxPages = numOfPages();
+
+	//find position of this item
+	if( searchEntryInArrayOfPages(position, _curPageNum, maxPages - 1) == false )
+	{
+		return -43;	//attempting to delete index-entry that does not exist
+	}
+
+	_curPageNum = position.pageNum;
+
+	//linearly search among duplicates until a requested item is found
+	unsigned int numOfEntriesInPage = ((unsigned int*)_curPageData)[0];
+	if( position.slotNum < numOfEntriesInPage )	//of course, providing that this page has some entries
+	{
+		//keep looping until we find the item
+		while
+		(
+			((BucketDataEntry*)((char*)_curPageData + 2 * sizeof(unsigned int) + position.slotNum * SZ_OF_BUCKET_ENTRY))->_key <= _key &&
+			(
+				((BucketDataEntry*)((char*)_curPageData + 2 * sizeof(unsigned int) + position.slotNum * SZ_OF_BUCKET_ENTRY))->_rid.pageNum != rid.pageNum ||
+				((BucketDataEntry*)((char*)_curPageData + 2 * sizeof(unsigned int) + position.slotNum * SZ_OF_BUCKET_ENTRY))->_rid.slotNum != rid.slotNum
+			)
+		)
+		{
+			position.slotNum++;
+			//if we go beyond the page boundaries then, go to the next page
+			if( position.slotNum >= numOfEntriesInPage )
+			{
+				//check if next page exists
+				if( position.pageNum + 1 >= (unsigned int)maxPages )
+				{
+					break;
+				}
+
+				//increment to next page
+				position.pageNum++;
+				_curPageNum = position.pageNum;
+
+				//reset slot number
+				position.slotNum = 0;
+
+				//read in the page
+				if( (errCode = getPage()) != 0 )
+				{
+					IX_PrintError(errCode);
+					exit(errCode);
+				}
+
+				//reset number of entries in the page
+				numOfEntriesInPage = ((unsigned int*)_curPageData)[0];
+			}
+		}
+
+		//check that the item is found (it should be pointed now by slotNum)
+		if( ((BucketDataEntry*)((char*)_curPageData + 2 * sizeof(unsigned int) + position.slotNum * SZ_OF_BUCKET_ENTRY))->_rid.pageNum != rid.pageNum ||
+			((BucketDataEntry*)((char*)_curPageData + 2 * sizeof(unsigned int) + position.slotNum * SZ_OF_BUCKET_ENTRY))->_rid.slotNum != rid.slotNum )
+		{
+			//if it is not the item, then it means we have looped thru all duplicate entries and still have not found the right one with given RID
+			return -43;	//attempting to delete index-entry that does not exist
+		}
+	}
+	else
+	{
+		//again, item to be deleted is not found
+		return -43;
+	}
+	//                 +-----------------------------+
+	//                 |                             |
+	//                 |                       ______|______
+	//                 |          carry in to "previous page"
+	//                 v                       |
+	//*----------------------------------*     |
+	//|                                   \    v
+	//[{}()()()...(X)(a)(b)(c)(d)(e)(f)(g)][{}(h)(i)...(z)()()()]	shifting_item = (h)
+	//             ^
+	//             |
+	//      item be deleted
+	//[{}()()()...(a)(b)(c)(d)(e)(f)(g)(h)][{}(i)....(z)()()()()]
+	//
+	//OR
+	//
+	//[{}()()()...(X)(a)(b)(c)(d)(e)(f)(g)()()()]	shifting_item = None, i.e. (), since there is no next page (and also because items end before the page)
+	//             ^
+	//             |
+	//      item be deleted
+	//[{}()()()...(a)(b)(c)(d)(e)(f)(g)()()()()]
+
+	//shift all items that exist afterwards by one element
+	//	it is easier to perform shift if it is started from the end
+	BucketDataEntry shiftingEntry = (BucketDataEntry)
+	{
+		((BucketDataEntry*)_entryData)->_key,
+		(RID){ ((BucketDataEntry*)_entryData)->_rid.pageNum, ((BucketDataEntry*)_entryData)->_rid.slotNum }
+	};
+
+	//the last page may happen to be full by itself, and shifting a new entry into it will result into insertion of new page
+	bool removePage = false;
+
+	//loop thru array of pages, starting from the one where position was found by the search function
+	for( int pageNum = maxPages - 1; pageNum >= (int)position.pageNum; pageNum-- )	//starting "backwards", i.e. from the last to the one where item to be deleted resides
+	{
+		//read the current page
+		if( pageNum != _curPageNum )
+		{
+			//update current page number
+			_curPageNum = pageNum;
+
+			//read in the page
+			if( (errCode = getPage()) != 0 )
+			{
+				IX_PrintError(errCode);
+				exit(errCode);
+			}
+		}
+
+		//the first item is one to be shifted to the "previous page"
+		BucketDataEntry firstItem;
+		memcpy
+		(
+			&firstItem,
+			(BucketDataEntry*)((char*)_curPageData + 2 * sizeof(unsigned int) ),
+			SZ_OF_BUCKET_ENTRY
+		);
+
+		//[{}()()()...(X)(a)(b)(c)(d)(e)(f)(g)][{}(h)(i)....(z)()()()]
+		//                ^                 ^         ^      ^
+		//                |                 |         |      |
+		//                +-----------------+         +------+
+		//                      case # 2              case # 1
+
+		//now determine the starting position and the size of the data segment within this page that is to be shifted
+		//(two cases considered, for description see image below)
+		//	case 1: shift starting from the 2nd slot in the page
+		//	case 2: shift starting from the item right before the deleted one
+		unsigned int start = 0;
+		int size = 0;
+
+		//determine the start index
+		if( pageNum == (int)position.pageNum )
+			start = position.slotNum + 1;	//case 2
+		else
+			start = 1;	//case 1
+
+		//BEFORE SHIFT:
+		//                         number of elements in each page
+		//  +--------------------------------------+--------------------------------------+
+		//  |                                      |                                      |
+		//  v   0  1  2  3  4  5  6  7  8  9 10    v   0  1  2  3  4  5  6  7  8  9 10    v  0  1  2  3
+		//[{11}(A)(B)(C)(X)(a)(b)(c)(d)(e)(f)(g)][{11}(h)(i)(j)(k)(l)(m)(n)(o)(p)(q)(r)][{4}(s)(t)(u)(v)()()()()()()]
+		//                  ^                 ^           ^                          ^          ^     ^
+		//                  |                 |           |                          |          |     |
+		//                  +-----------------+           +--------------------------+          +-----+
+		//                      7 = 11 - 4                         10 = 11 - 1                 3 = 4 - 1
+		//                       \                                 |                          /
+		//                        +--------------------------------+-------------------------+
+		//                                     size of each segment to be shifted
+		//AFTER SHIFT:
+		//[{11}(A)(B)(C)(a)(b)(c)(d)(e)(f)(g)(h)][{11}(i)(j)(k)(l)(m)(n)(o)(p)(q)(r)(s)][{3}(t)(u)(v)()()()()()()()]
+		//                                    ^                                      ^    ^
+		//                                    |                                      |    |
+		//                                    +--------------------------------------+    |
+		//                                                elements shifted                |
+		//                                                                                only the last page's size is changed
+		size = ((unsigned int*)_curPageData)[0] - start;
+
+		//perform the shift, but only if it is necessary, i.e. if number of elements to be shifted > 0
+		if( size > 0 )
+		{
+			memmove(
+				((char*)_curPageData + 2 * sizeof(unsigned int) + (start - 1) * SZ_OF_BUCKET_ENTRY),
+				((char*)_curPageData + 2 * sizeof(unsigned int) + start * SZ_OF_BUCKET_ENTRY),
+				size * SZ_OF_BUCKET_ENTRY );
+		}
+
+		//copy the previously saved entry from the last page (or if it is the first page, then the entry to be inserted)
+		//copy in the element "(#)" into position 8 from which element "(a)" was moved
+		memcpy(
+			(char*)_curPageData + 2 * sizeof(unsigned int) +  ( ((unsigned int*)_curPageData)[0] - 1 ) * sizeof(BucketDataEntry),
+			&shiftingEntry,
+			SZ_OF_BUCKET_ENTRY);
+
+		//copy the first entry saved in this page into the variable shiftingEntry
+		shiftingEntry._key = firstItem._key;
+		shiftingEntry._rid.pageNum = firstItem._rid.pageNum;
+		shiftingEntry._rid.slotNum = firstItem._rid.slotNum;
+
+		//change page size of the "last page" (i.e. page from which we started the shifting)
+		if( pageNum == maxPages - 1 )
+		{
+			((unsigned int*)_curPageData)[0]--;
+
+			//determine if the last page needs to be deleted
+			if( ((unsigned int*)_curPageData)[0] == 0 )
+			{
+				removePage = true;
+			}
+		}
+
+		//write back the page to an appropriate file
+		if( _curPageNum == 0 )
+		{
+			//write page to "primary file"
+			if( (errCode = _ixfilehandle._primBucketDataFileHandler.writePage(_bktNumber + 1, _curPageData)) != 0 )
+			{
+				IX_PrintError(errCode);
+				exit(errCode);
+			}
+		}
+		else
+		{
+			//write page to "overflow file"
+
+			//determine physical page number
+			PageNum actualPageNumber = _ixfilehandle._info->_overflowPageIds[_bktNumber][_curPageNum - 1];
+
+			if( (errCode = _ixfilehandle._overBucketDataFileHandler.writePage(actualPageNumber, _curPageData)) != 0 )
+			{
+				IX_PrintError(errCode);
+				exit(errCode);
+			}
+		}
+	}
+
+	if( removePage )
+	{
+		if( _curPageNum > 0 )
+		{
+			//if it happens to be the overflow page, then remove record about it from the overflowPageId map and the overflow PFM header
+			if( removePageRecord() != 0 )
+			{
+				return errCode;
+			}
+		}
+		else if( _bktNumber == ( _ixfilehandle._info->N * (unsigned int)pow(2.0, (int)_ixfilehandle._info->Level) - 1 ) )
+		{
+			//if it is a last primary bucket, then "merge it with its image"
+			if( _ixfilehandle._info->Next > 0 )
+			{
+				_ixfilehandle._info->Next--;
+			}
+			else
+			{
+				_ixfilehandle._info->Next =
+						(unsigned int)( _ixfilehandle._info->N * (unsigned int)pow(2.0, (int)(_ixfilehandle._info->Level - 1)) - 1 );
+				_ixfilehandle._info->Level--;
+			}
+		}
+	}
+
+	//success
+	return errCode;
+}
+
 void MetaDataSortedEntries::insertEntry()
 {
 	RID position = (RID){0, 0};
@@ -1068,16 +1464,15 @@ void MetaDataSortedEntries::insertEntry()
 	//                  *---------------------------*
 	//                    shiftingEntity = (#), i.e. item that is inserted
 	//[{}()()()()()()()(#)(a)(b)(c)(d)(e)(f)(g)(h)(i)(j)(k)][{}(m)(n)(o)(p)()()()()()()()()()()]
-	//               =>    \                            /         ^
-	//                      *--------------------------*          |
-	//					  shiftingEntry = (l)---------------------*
+	//               =>    \                            /       ^
+	//                      *--------------------------*        |
+	//					  shiftingEntry = (l)-------------------*
 	//[{}()()()()()()()(#)(a)(b)(c)(d)(e)(f)(g)(h)(i)(j)(k)][{}(l)(m)(n)(o)(p)()()()()()()()()()]
 
 	//shifting entry stores the item which was either:
 	//	1. the very item that needs to be inserted into the list, like item "(#)"
 	//	2. or, the last item from the prior page shifting, like item "(l)" from the picture above
-	BucketDataEntry shiftingEntry =
-			(BucketDataEntry)
+	BucketDataEntry shiftingEntry = (BucketDataEntry)
 	{
 		((BucketDataEntry*)_entryData)->_key,
 		(RID){ ((BucketDataEntry*)_entryData)->_rid.pageNum, ((BucketDataEntry*)_entryData)->_rid.slotNum }
