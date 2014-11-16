@@ -915,6 +915,16 @@ RC MetaDataSortedEntries::removePageRecord()
 		return -45;
 	}
 
+	//write back the header page
+	if( (errCode = _ixfilehandle._overBucketDataFileHandler.writePage((PageNum)headerPageId, data)) != 0 )
+	{
+		//deallocate data
+		free(data);
+
+		//return error
+		return errCode;
+	}
+
 	//deallocate temporary buffer for header page
 	free(data);
 
@@ -1164,7 +1174,50 @@ RC MetaDataSortedEntries::deleteEntry(const RID& rid)
 	unsigned int numOfEntriesInPage = ((unsigned int*)_curPageData)[0];
 	if( position.slotNum < numOfEntriesInPage )	//of course, providing that this page has some entries
 	{
-		//keep looping until we find the item
+		//in the presence of duplicates, we may arrive at any random spot within the list duplicates tuples (i.e. tuples with the same key)
+		//but in order to make sure that the item exists or does not exist, we need to scan the whole list of duplicates
+
+		//first, however, need to find the start of the duplicate list
+		while(true)
+		{
+			//check if the current item has a different key (less than the key of interest)
+			if( ((BucketDataEntry*)((char*)_curPageData + 2 * sizeof(unsigned int) + position.slotNum * SZ_OF_BUCKET_ENTRY))->_key < _key )
+			{
+				//if so, then quit => start is found
+				break;
+			}
+
+			//check if the next index is outside of the page
+			if( position.slotNum == 0 )
+			{
+				//check if this is a primary page
+				if( position.pageNum == 0 )
+				{
+					//if so, there are no pages in front of it => start is found
+					break;
+				}
+				//otherwise, go to the previous page
+				position.pageNum--;
+				_curPageNum = position.pageNum;
+
+				//reset slot number
+				position.slotNum = MAX_BUCKET_ENTRIES_IN_PAGE - 1;
+
+				//read in the page
+				if( (errCode = getPage()) != 0 )
+				{
+					IX_PrintError(errCode);
+					exit(errCode);
+				}
+			}
+
+			//decrement index
+			position.slotNum--;
+		}
+
+		//now linearly scan thru the list of duplicates until either:
+		//	1. item is found
+		//	2. or, items with the given key are exhausted => no specified item exists => fail
 		while
 		(
 			((BucketDataEntry*)((char*)_curPageData + 2 * sizeof(unsigned int) + position.slotNum * SZ_OF_BUCKET_ENTRY))->_key <= _key &&
@@ -1239,14 +1292,17 @@ RC MetaDataSortedEntries::deleteEntry(const RID& rid)
 
 	//shift all items that exist afterwards by one element
 	//	it is easier to perform shift if it is started from the end
-	BucketDataEntry shiftingEntry = (BucketDataEntry)
-	{
+	BucketDataEntry shiftingEntry = (BucketDataEntry){0, (RID){0, 0}};
+	/*{
 		((BucketDataEntry*)_entryData)->_key,
 		(RID){ ((BucketDataEntry*)_entryData)->_rid.pageNum, ((BucketDataEntry*)_entryData)->_rid.slotNum }
-	};
+	};*/
 
 	//the last page may happen to be full by itself, and shifting a new entry into it will result into insertion of new page
 	bool removePage = false;
+
+	//save slot number
+	unsigned int slotNumber = position.slotNum;
 
 	//loop thru array of pages, starting from the one where position was found by the search function
 	for( int pageNum = maxPages - 1; pageNum >= (int)position.pageNum; pageNum-- )	//starting "backwards", i.e. from the last to the one where item to be deleted resides
@@ -1289,7 +1345,7 @@ RC MetaDataSortedEntries::deleteEntry(const RID& rid)
 
 		//determine the start index
 		if( pageNum == (int)position.pageNum )
-			start = position.slotNum + 1;	//case 2
+			start = slotNumber + 1;	//case 2
 		else
 			start = 1;	//case 1
 
@@ -1375,6 +1431,7 @@ RC MetaDataSortedEntries::deleteEntry(const RID& rid)
 
 	if( removePage )
 	{
+		_curPageNum = maxPages - 1;
 		if( _curPageNum > 0 )
 		{
 			//if it happens to be the overflow page, then remove record about it from the overflowPageId map and the overflow PFM header

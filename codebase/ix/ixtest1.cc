@@ -28,6 +28,18 @@ void test(IXFileHandle fileHandle)
 			printFile(fileHandle._overBucketDataFileHandler);
 		}*/
 	}
+	i = 0;
+	for( ; i < 1023; i+=10 )
+	{
+		unsigned int key = i % 10;
+		BucketDataEntry me = (BucketDataEntry){key, (RID){i / 10 + 1, (unsigned int)'A'}};
+		MetaDataSortedEntries mdse(fileHandle, 1, (unsigned int)key, (void*)&me);
+		mdse.deleteEntry(me._rid);
+		std::cout << endl << "primary data file:" << endl;
+		printFile(fileHandle._primBucketDataFileHandler);
+		std::cout << endl << "overflow data file:" << endl;
+		printFile(fileHandle._overBucketDataFileHandler);
+	}
 }
 
 int testCase_1(const string &indexFileName)
