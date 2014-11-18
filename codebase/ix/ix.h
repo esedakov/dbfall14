@@ -43,7 +43,6 @@ class IndexManager {
   // Close an IXFileHandle. 
   RC closeFile(IXFileHandle &ixfileHandle);
 
-
   // The following functions  are using the following format for the passed key value.
   //  1) data is a concatenation of values of the attributes
   //  2) For INT and REAL: use 4 bytes to store the value;
@@ -75,7 +74,7 @@ class IndexManager {
   // Generate and return the hash value (unsigned) for the given key
   unsigned hash(const Attribute &attribute, const void *key);
   
-  unsigned hash_at_specified_level(const int level, const unsigned int hashed_key);
+  unsigned hash_at_specified_level(const int N, const int level, const unsigned int hashed_key);
 
   
   // Print all index entries in a primary page including associated overflow pages
@@ -124,6 +123,8 @@ public:
     IXFileHandle();  							// Constructor
     ~IXFileHandle(); 							// Destructor
 
+    int N_Level();
+
     //file handles
 	FileHandle _metaDataFileHandler;
 	FileHandle _primBucketDataFileHandler;
@@ -161,16 +162,15 @@ struct BucketDataEntry
 	unsigned int _key;
 	RID _rid;
 };
+
 #define SZ_OF_BUCKET_ENTRY sizeof(BucketDataEntry)
+
 #define MAX_BUCKET_ENTRIES_IN_PAGE ( (PAGE_SIZE - sizeof(unsigned int) * 2) / SZ_OF_BUCKET_ENTRY )
 
-//class provides utilities for inserting and removing entries, while maintaining order
-//used for both meta-data entries <bucket-number, overflow page id> AND
-//	bucket data (primary+overflow) entries <key, RID>
 class MetaDataSortedEntries
 {
 public:
-	MetaDataSortedEntries(IXFileHandle ixfilehandle, BUCKET_NUMBER bucket_number, unsigned int key, const void* entry);
+	MetaDataSortedEntries(IXFileHandle& ixfilehandle, BUCKET_NUMBER bucket_number, unsigned int key, const void* entry);
 	~MetaDataSortedEntries();
 	void insertEntry();
 	bool searchEntry(RID& position, BucketDataEntry& entry);
@@ -181,16 +181,16 @@ protected:
 	RC getPage();
 	void addPage();
 	RC removePageRecord();
+	RC erasePageFromHeader(FileHandle& fileHandle);
 	unsigned int numOfPages();
+	RC splitBucket();
+	RC mergeBuckets();
 private:
-	//general purpose data-members
 	IXFileHandle _ixfilehandle;
 	unsigned int _key;
 	const void* _entryData;
 	int _curPageNum;
 	void* _curPageData;
-	//FileHandleInUse _whichFileHandle;
-	//specific for bucket data entry
 	BUCKET_NUMBER _bktNumber;
 };
 
