@@ -389,13 +389,14 @@ RC PagedFileManager::getDataPage(FileHandle &fileHandle, const unsigned int reco
 				//update free space left
 				if( ixDataPage )
 				{
-					freeSpaceLeftInPage = 0;
+					pi->_numFreeBytes = 0;
 				}
 				else
 				{
 					pi->_numFreeBytes -= recordSize + sizeof(PageDirSlot);
-					freeSpaceLeftInPage = pi->_numFreeBytes;
 				}
+
+				freeSpaceLeftInPage = pi->_numFreeBytes;
 
 				//assign a header page
 				headerPage = lastHeaderPageId;

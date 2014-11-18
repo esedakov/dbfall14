@@ -16,6 +16,8 @@
  * -44 => no overflow page is found in the local map
  * -45 => could not delete page
  * -46 => neither lower nor higher bucket is chosen by the hash function
+ *
+ * -50 = key was not found
  */
 
 IndexManager* IndexManager::_index_manager = 0;
@@ -510,6 +512,8 @@ RC IndexManager::insertEntry(IXFileHandle &ixfileHandle, const Attribute &attrib
 	//hashed key
 	unsigned int hkey = hash_at_specified_level(ixfileHandle._info->N, ixfileHandle._info->Level, hash(attribute, key));
 
+	//TODO: key needs to become void*
+
 	BucketDataEntry me = (BucketDataEntry){key, (RID){rid.pageNum, rid.slotNum}};
 	MetaDataSortedEntries mdse(ixfileHandle, hkey, (unsigned int)key, (void*)&me);
 	mdse.insertEntry();
@@ -810,15 +814,235 @@ void IX_PrintError (RC rc)
 	std::cout << "component: " << compName << " => " << errMsg;
 }
 
+//PFM EXTENSION CLASS METHODS -- BEGIN
+
+//both virtual and physical page numbers
+RC PFMExtension::translateVirtualToPhysical(PageNum& physicalPageNum, const BUCKET_NUMBER bkt_number, const PageNum virtualPageNum)
+{
+	physicalPageNum = bkt_number + 1;	//setup by default to point at primary page
+										//primary file has first page reserved for PFM header, so bucket # 0 starts at page # 1, which
+										//is why actualPageNumber is bucket number + 1
+
+	if( virtualPageNum > 0 )	//if inside the overflow file
+	{
+		//then, consult with information about overflow page locations stored inside the file handler to
+		//determine which page to load
+
+		//first check whether the page exists inside overflow file (i.e. is virtual page points beyond the file)
+		if( (virtualPageNum - 1) >= _handle._info->_overflowPageIds[bkt_number].size() )
+		{
+			return -42;	//accessing a page beyond bucket's data
+		}
+
+		//get physical overflow page number corresponding to the "virtual page number"
+		physicalPageNum = _handle._info->_overflowPageIds[bkt_number][virtualPageNum - 1];
+	}
+
+	//success
+	return 0;
+}
+
+//virtual page number
+RC PFMExtension::getPage(const BUCKET_NUMBER bkt_number, const PageNum pageNumber)
+{
+	RC errCode = 0;
+
+	//determine physical page number from the given virtual page number
+	PageNum physicalPageNumber = 0;
+	if( (errCode = translateVirtualToPhysical(physicalPageNumber, bkt_number, pageNumber)) != 0 )
+	{
+		return errCode;
+	}
+
+	if( _curVirtualPage > 0 )	//if inside the overflow file
+	{
+		//retrieve the data and store in the current buffer
+		if( (errCode = _handle._overBucketDataFileHandler.readPage(physicalPageNumber, _buffer)) != 0 )
+		{
+			return errCode;
+		}
+	}
+	else
+	{
+		//then, inside the "primary page"
+		//read the page from the primary file
+		if( (errCode = _handle._primBucketDataFileHandler.readPage(physicalPageNumber, _buffer)) != 0 )
+		{
+			return errCode;
+		}
+	}
+
+	//success
+	return errCode;
+}
+
+PFMExtension::PFMExtension(IXFileHandle handle, BUCKET_NUMBER bkt_number)
+: _handle(handle), _buffer(malloc(PAGE_SIZE)), _curVirtualPage(0)
+{
+	RC errCode = 0;
+	if( (errCode = getPage(bkt_number, _curVirtualPage)) != 0 )
+	{
+		IX_PrintError(errCode);
+		exit(errCode);
+	}
+}
+
+//virtual page number
+RC PFMExtension::getTuple(void* tuple, BUCKET_NUMBER bkt_number, const unsigned int pageNumber, const int slotNumber) //modified version of ReadRecord from RBFM
+{
+	RC errCode = 0;
+
+	if( tuple == NULL )
+	{
+		return -11; //data is corrupted
+	}
+
+	FileHandle handle = ( _curVirtualPage == 0 ? _handle._primBucketDataFileHandler : _handle._overBucketDataFileHandler );
+
+	if( pageNumber == 0 || pageNumber >= handle.getNumberOfPages() )
+	{
+		return -27; //rid is not setup correctly
+	}
+
+	//translate to physical page number
+	PageNum physicalPageNumber = 0;
+	if( (errCode = translateVirtualToPhysical(physicalPageNumber, bkt_number, pageNumber)) != 0 )
+	{
+		return errCode;
+	}
+
+	//if necessary read in the page
+	if( pageNumber != _curVirtualPage )
+	{
+		_curVirtualPage = pageNumber;
+
+		//read data page
+		if( (errCode = getPage(bkt_number, pageNumber)) != 0 )
+		{
+			//deallocate dataPage
+			free(dataPage);
+
+			//read failed
+			return errCode;
+		}
+	}
+
+	/*
+	 * data page has a following format:
+	 * [list of records without any spaces in between][free space for records][list of directory slots][(number of slots):unsigned int][(offset from page start to the start of free space):unsigned int]
+	 * ^                                                                      ^                       ^                                                                                                 ^
+	 * start of page                                                          start of dirSlot        end of dirSlot                                                                          end of page
+	 */
+
+	//get pointer to the end of directory slots
+	PageDirSlot* ptrEndOfDirSlot = (PageDirSlot*)((char*)_buffer + PAGE_SIZE - 2 * sizeof(unsigned int));
+
+	//find out number of directory slots
+	unsigned int numSlots = *((unsigned int*)ptrEndOfDirSlot);
+
+	//check if rid is correct in terms of indexed slot
+	if( slotNumber >= numSlots )
+	{
+		//deallocate data page
+		free(dataPage);
+
+		return -23; //rid is not setup correctly
+	}
+
+	//get slot
+	PageDirSlot* curSlot = (PageDirSlot*)(ptrEndOfDirSlot - slotNumber - 1);
+
+	//find slot offset
+	unsigned int offRecord = curSlot->_offRecord;
+	unsigned int szRecord = curSlot->_szRecord;
+
+	//check if slot attributes make sense
+	if( offRecord == 0 && szRecord == 0 )
+	{
+		return -24;	//directory slot stores wrong information
+	}
+
+	//determine pointer to the record
+	char* ptrRecord = (char*)(_buffer) + offRecord;
+
+	//begin section for project 2: in case the record in this page is a TombStone
+	/*if( szRecord == (unsigned int)-1 )
+	{
+		//redirect to a different location; (page, slot) is specified in the record's body
+		RID* ptrNewRid = (RID*)ptrRecord;
+
+		//now go ahead and try to read this record
+		errCode = readEncodedRecord(fileHandle, recordDescriptor, *ptrNewRid, data);
+
+		//free data page (fixing memory leak)
+		free(dataPage);
+
+		return errCode;
+	}*/
+	//end section for project 2
+
+	//copy record contents
+	memcpy(_buffer, ptrRecord, szRecord);
+
+	//return success
+	return errCode;
+}
+
+RC PFMExtension::shiftRecordsToStart(
+		const BUCKET_NUMBER bkt_number, const PageNum startingInPageNumber, const int startingFromSlotNumber, unsigned int szInBytes)
+{
+	RC errCode = 0;
+
+	//
+
+	//success
+	return errCode;
+}
+
+RC PFMExtension::shiftRecordsToEnd(
+		const BUCKET_NUMBER bkt_number, const PageNum startingInPageNumber, const int startingFromSlotNumber, unsigned int szInBytes)
+{
+	RC errCode = 0;
+
+	//
+
+	//success
+	return errCode;
+}
+
+RC PFMExtension::deleteTuple(const BUCKET_NUMBER bkt_number, const PageNum pageNumber, const int slotNumber)
+{
+	RC errCode = 0;
+
+	//
+
+	//success
+	return errCode;
+}
+
+RC PFMExtension::insertTuple(const BUCKET_NUMBER bkt_number, const PageNum pageNumber, const int slotNumber)
+{
+	RC errCode = 0;
+
+	//
+
+	//success
+	return errCode;
+}
+
+//PFM EXTENSION CLASS METHODS -- END
+
 //functions for the SortedEntries class
-MetaDataSortedEntries::MetaDataSortedEntries(IXFileHandle& ixfilehandle, BUCKET_NUMBER bucket_number, unsigned int key, const void* entry)
-: _ixfilehandle(ixfilehandle), _key(key), _entryData(entry), _curPageNum(0), _curPageData(malloc(PAGE_SIZE)), _bktNumber(bucket_number)
+MetaDataSortedEntries::MetaDataSortedEntries(
+		IXFileHandle& ixfilehandle, BUCKET_NUMBER bucket_number, const Attribute& attr, const void* key, const void* entry)
+: _ixfilehandle(ixfilehandle), _key(key), _attr(attr), _entryData(entry), _curPageNum(0), _curPageData(malloc(PAGE_SIZE)),
+  _bktNumber(bucket_number)
 {
 	getPage();
 }
 
 //_curPageNum should be physical page number not virtual inside this function
-RC MetaDataSortedEntries::erasePageFromHeader(FileHandle& fileHandle)
+/*RC MetaDataSortedEntries::erasePageFromHeader(FileHandle& fileHandle)
 {
 	//find header page that contains the record about the data page to be removed
 	PageNum headerPageId = 0;
@@ -905,10 +1129,10 @@ RC MetaDataSortedEntries::erasePageFromHeader(FileHandle& fileHandle)
 
 	//success
 	return errCode;
-}
+}*/
 
 //assuming that _curPageNum is a virtual page number
-RC MetaDataSortedEntries::removePageRecord()
+/*RC MetaDataSortedEntries::removePageRecord()
 {
 	//remove record from the overflowPageId map
 	if( _ixfilehandle._info->_overflowPageIds.find(_bktNumber) == _ixfilehandle._info->_overflowPageIds.end() )
@@ -926,26 +1150,26 @@ RC MetaDataSortedEntries::removePageRecord()
 	//assign a physical page number to _curPageNum
 	_curPageNum = physPageNumber;
 
-	/*std::map<int, PageNum>::iterator
-		i = _ixfilehandle._info->_overflowPageIds[_bktNumber].begin(),
-		max = _ixfilehandle._info->_overflowPageIds[_bktNumber].end();
+	//std::map<int, PageNum>::iterator
+	//	i = _ixfilehandle._info->_overflowPageIds[_bktNumber].begin(),
+	//	max = _ixfilehandle._info->_overflowPageIds[_bktNumber].end();
 
-	for( ; i != max; i++ )
-	{
-		if( i->second == (unsigned int)_curPageNum )
-		{
-			_ixfilehandle._info->_overflowPageIds[_bktNumber].erase(i);
-			break;
-		}
-	}*/
+	//for( ; i != max; i++ )
+	//{
+	//	if( i->second == (unsigned int)_curPageNum )
+	//	{
+	//		_ixfilehandle._info->_overflowPageIds[_bktNumber].erase(i);
+	//		break;
+	//	}
+	//}
 
 	erasePageFromHeader(_ixfilehandle._overBucketDataFileHandler);
 
 	//success
 	return 0;
-}
+}*/
 
-void MetaDataSortedEntries::addPage()
+/*void MetaDataSortedEntries::addPage()
 {
 	RC errCode = 0;
 
@@ -992,7 +1216,7 @@ void MetaDataSortedEntries::addPage()
 
 	//insert an entry
 	_ixfilehandle._info->_overflowPageIds[_bktNumber].insert( std::pair<int, unsigned int>(newOrderValue, dataPageId) );
-}
+}*/
 
 RC MetaDataSortedEntries::getPage()
 {
@@ -1060,34 +1284,114 @@ MetaDataSortedEntries::~MetaDataSortedEntries()
 	free(_curPageData);
 }
 
-bool MetaDataSortedEntries::searchEntry(RID& position, BucketDataEntry& entry)
+RC MetaDataSortedEntries::translateToPageNumber(const PageNum& pagenumber, PageNum& result)
+{
+	result = _bktNumber + 1;	//setup by default to point at primary page
+								//primary file has first page reserved for PFM header, so bucket # 0 starts at page # 1, which
+								//is why actualPageNumber is bucket number + 1
+
+	if( _curPageNum > 0 )	//if inside the overflow file
+	{
+		//then, consult with information about overflow page locations stored inside the file handler to
+		//determine which page to load
+
+		PageNum overFlowPageId = _curPageNum - 1;
+
+		//first check whether the page exists inside overflow file (i.e. is virtual page points beyond the file)
+		if( overFlowPageId >= _ixfilehandle._info->_overflowPageIds[_bktNumber].size() )
+		{
+			return -42;	//accessing a page beyond bucket's data
+		}
+
+		//get physical overflow page number corresponding to the "virtual page number"
+		result = _ixfilehandle._info->_overflowPageIds[_bktNumber][overFlowPageId];
+	}
+}
+
+//pageNumber is virtual
+RC MetaDataSortedEntries::getTuple(const PageNum pageNumber, const unsigned int slotNumber, void* entry)
+{
+	RC errCode = 0;
+
+	vector<Attribute> descriptor;
+	descriptor.push_back(_attr);
+
+	//determine the page number, since position.pageNum is a "virtual page index"
+	PageNum actualPageNumber = 0;
+	if( (errCode = translateToPageNumber(pageNumber, actualPageNumber)) != 0 )
+	{
+		return errCode;
+	}
+
+	FileHandle handle;
+
+	//determine which handle to use to read the page
+	if( pageNumber == 0 )
+	{
+		handle = _ixfilehandle._primBucketDataFileHandler;
+	}
+	else
+	{
+		handle = _ixfilehandle._overBucketDataFileHandler;
+	}
+
+	RecordBasedFileManager* rbfm = RecordBasedFileManager::instance();
+
+	//copy the result into entry buffer
+	if( (errCode = rbfm->readRecord(handle, descriptor, (RID){actualPageNumber, slotNumber}, entry)) != 0 )
+	{
+		return errCode;
+	}
+
+	//success
+	return errCode;
+}
+
+RC MetaDataSortedEntries::searchEntry(RID& position, void* entry)
 {
 	bool success_flag = searchEntryInArrayOfPages(position, _curPageNum, numOfPages() - 1);
 
 	if( success_flag == false )
-		return false;	//failure
+		return -50;
 
-	//copy result
-	memcpy(&entry, (BucketDataEntry*)((char*)_curPageData + 2 * sizeof(unsigned int) + position.slotNum * SZ_OF_BUCKET_ENTRY), SZ_OF_BUCKET_ENTRY);
+	RC errCode = 0;
+
+	if( (errCode = getTuple(position.pageNum, position.slotNum, entry)) != 0 )
+	{
+		return errCode;
+	}
 
 	//success
-	return success_flag;
+	return 0;
 }
 
-int MetaDataSortedEntries::searchEntryInPage(RID& result, int indexStart, int indexEnd)
+//pageNumber is virtual
+int MetaDataSortedEntries::searchEntryInPage(RID& result, const PageNum& pageNumber, const int indexStart, const int indexEnd)
 {
 	//binary search algorithm adopted from: Data Abstraction and Problem Solving with C++ (published 2005) by Frank Carrano, page 87
 
 	if( indexStart > indexEnd )
 	{
-		result.pageNum = _curPageNum;
+		result.pageNum = pageNumber;
 		result.slotNum = indexStart == 0 ? indexStart : indexEnd;
 		return indexStart == 0 ? -1 : 1;	//-1 means looking for item less than those presented in this page
 											//+1 means looking for item greater than those presented in this page
 	}
 
 	int middle = (indexStart + indexEnd) / 2;
-	unsigned int midValue = ((BucketDataEntry*)((char*)_curPageData + sizeof(unsigned int) * 2 + sizeof(BucketDataEntry) * middle))[0]._key;
+
+	//allocate buffer for storing the retrieved entry
+	void* midValue = malloc(PAGE_SIZE);
+	memset(midValue, 0, PAGE_SIZE);
+
+	RC errCode = 0;
+
+	//retrieve middle value
+	if( (errCode = getTuple(pageNumber, middle, midValue)) != 0 )
+	{
+		free(midValue);
+		return errCode;
+	}
 
 	if( _key == midValue )
 	{
@@ -1096,18 +1400,20 @@ int MetaDataSortedEntries::searchEntryInPage(RID& result, int indexStart, int in
 	}
 	else if( _key < midValue )
 	{
-		return searchEntryInPage(result, indexStart, middle - 1);
+		return searchEntryInPage(result, pageNumber, indexStart, middle - 1);
 	}
 	else
 	{
-		return searchEntryInPage(result, middle + 1, indexEnd);
+		return searchEntryInPage(result, pageNumber, middle + 1, indexEnd);
 	}
 
 	//success
 	return 0;	//0 means that the item is found in this page
 }
 
-bool MetaDataSortedEntries::searchEntryInArrayOfPages(RID& position, int start, int end)
+//startPageNumber and endPageNumber are virtual page indexes
+//(because it is possible for them to become less than zero, so type has to be kept as integer)
+bool MetaDataSortedEntries::searchEntryInArrayOfPages(RID& position, const int startPageNumber, const int endPageNumber)
 {
 	bool success_flag = false;
 
@@ -1116,11 +1422,11 @@ bool MetaDataSortedEntries::searchEntryInArrayOfPages(RID& position, int start, 
 
 	//seeking range gets smaller with every iteration by a approximately half, and if there is no requested item, then we will get
 	//range down to a zero, i.e. when end is smaller than the start. At this instance, return failure (i.e. false)
-	if( start > end )
+	if( startPageNumber > endPageNumber )
 		return success_flag;
 
 	//determine the middle entry inside this page
-	PageNum middlePageNumber = (start + end) / 2;
+	PageNum middlePageNumber = (startPageNumber + endPageNumber) / 2;
 
 	if( _curPageNum != (int)middlePageNumber )
 	{
@@ -1134,13 +1440,20 @@ bool MetaDataSortedEntries::searchEntryInArrayOfPages(RID& position, int start, 
 		}
 	}
 
+    /*
+	 * data page has a following format:
+	 * [list of records without any spaces in between][free space for records][list of directory slots][(number of slots):unsigned int][(offset from page start to the start of free space):unsigned int]
+	 * ^                                                                      ^                       ^                                                                                                 ^
+	 * start of page                                                          start of dirSlot        end of dirSlot                                                                          end of page
+	 */
+
 	//get number of items stored in a page
 	//first integer in a (overflow or primary) page represents number of items
 	//second integer, whether the page is used or not (I have not fully incorporated isUsed in the algorithm right now, just reserved the space)
-	unsigned int num_entries = ((unsigned int*)_curPageData)[0];
+    unsigned int numSlots = ( (unsigned int*)( (char*)_curPageData + PAGE_SIZE - 2 * sizeof(unsigned int) ) )[0];
 
 	//determine if the requested key is inside this page
-	int result = searchEntryInPage(position, 0, num_entries - 1);
+	int result = searchEntryInPage(position, middlePageNumber, 0, numSlots - 1);
 
 	//if it is inside this page, then return success
 	if( result == 0 )
@@ -1154,13 +1467,13 @@ bool MetaDataSortedEntries::searchEntryInArrayOfPages(RID& position, int start, 
 		//keep in mind that checking is not linear, but instead a current range
 		//[start, end] is divided into a half [start, middle - 1] and then
 		//this function is called recursively on this range of pages
-		return searchEntryInArrayOfPages(position, start, middlePageNumber - 1);
+		return searchEntryInArrayOfPages(position, startPageNumber, middlePageNumber - 1);
 	}
 	else
 	{
 		//if keys inside this page are too low, then check pages to the right
 		//similar idea is used over here, except new range is [middle + 1, end]
-		return searchEntryInArrayOfPages(position, middlePageNumber + 1, end);
+		return searchEntryInArrayOfPages(position, middlePageNumber + 1, endPageNumber);
 	}
 
 	//success

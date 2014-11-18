@@ -42,6 +42,121 @@ void test(IXFileHandle fileHandle)
 	}
 }
 
+void test2(IXFileHandle fileHandle, unsigned int N)
+{
+	RC errCode = 0;
+	unsigned int i = 0;
+	//insert entries in a bucket 0
+	for( ; i < MAX_BUCKET_ENTRIES_IN_PAGE; i++ )
+	{
+		unsigned int key = i * N;	//try with 0
+		BucketDataEntry me = (BucketDataEntry){key, (RID){i + 1, (unsigned int)'A'}};
+		MetaDataSortedEntries mdse(fileHandle, 0, (unsigned int)key, (void*)&me);
+		mdse.insertEntry();
+
+		//print file
+		/*if( i % 339 == 0 || i % 340 == 0 || i % 680 == 0 )
+		{
+			std::cout << endl << "primary data file:" << endl;
+			printFile(fileHandle._primBucketDataFileHandler);
+			std::cout << endl << "overflow data file:" << endl;
+			printFile(fileHandle._overBucketDataFileHandler);
+		}*/
+	}
+	i = 0;
+	//insert entries in a bucket 1
+	for( ; i < MAX_BUCKET_ENTRIES_IN_PAGE * 3 + 1; i++ )
+	{
+		unsigned int key = i * N + 1;	//try with 1
+		BucketDataEntry me = (BucketDataEntry){key, (RID){i + 1, (unsigned int)'A'}};
+		MetaDataSortedEntries mdse(fileHandle, 1, (unsigned int)key, (void*)&me);
+		mdse.insertEntry();
+
+		if( i == 0 ||
+			i == MAX_BUCKET_ENTRIES_IN_PAGE - 1 || i == MAX_BUCKET_ENTRIES_IN_PAGE || i == MAX_BUCKET_ENTRIES_IN_PAGE + 1||
+			i == MAX_BUCKET_ENTRIES_IN_PAGE * 2 - 1 || i == MAX_BUCKET_ENTRIES_IN_PAGE * 2 || i == MAX_BUCKET_ENTRIES_IN_PAGE * 2 + 1 ||
+			i == MAX_BUCKET_ENTRIES_IN_PAGE * 3 - 1 || i == MAX_BUCKET_ENTRIES_IN_PAGE * 3 )
+		{
+			std::cout << endl << "primary data file:" << endl;
+			printFile(fileHandle._primBucketDataFileHandler);
+			std::cout << endl << "overflow data file:" << endl;
+			printFile(fileHandle._overBucketDataFileHandler);
+		}
+	}
+	std::cout << endl << "meta data file:" << endl;
+	printFile(fileHandle._metaDataFileHandler);
+	std::cout << endl << "primary data file:" << endl;
+	printFile(fileHandle._primBucketDataFileHandler);
+	std::cout << endl << "overflow data file:" << endl;
+	printFile(fileHandle._overBucketDataFileHandler);
+	i = MAX_BUCKET_ENTRIES_IN_PAGE * 3;
+	for( ; i >= 1; i-- )
+	{
+		unsigned int key = i * N + 1;
+		BucketDataEntry me = (BucketDataEntry){key, (RID){i + 1, (unsigned int)'A'}};
+		MetaDataSortedEntries mdse(fileHandle, 1, (unsigned int)key, (void*)&me);
+		if( (errCode = mdse.deleteEntry(me._rid)) != 0 )
+		{
+			cout << "error : " << errCode;
+			exit(errCode);
+		}
+		if( i == MAX_BUCKET_ENTRIES_IN_PAGE - 1 || i == MAX_BUCKET_ENTRIES_IN_PAGE || i == MAX_BUCKET_ENTRIES_IN_PAGE + 1||
+			i == MAX_BUCKET_ENTRIES_IN_PAGE * 2 - 1 || i == MAX_BUCKET_ENTRIES_IN_PAGE * 2 || i == MAX_BUCKET_ENTRIES_IN_PAGE * 2 + 1 ||
+			i == MAX_BUCKET_ENTRIES_IN_PAGE * 3 - 1 || i == MAX_BUCKET_ENTRIES_IN_PAGE * 3 )
+		{
+			std::cout << endl << "primary data file:" << endl;
+			printFile(fileHandle._primBucketDataFileHandler);
+			std::cout << endl << "overflow data file:" << endl;
+			printFile(fileHandle._overBucketDataFileHandler);
+		}
+	}
+}
+
+void test3(IXFileHandle fileHandle, unsigned int N)
+{
+	RC errCode = 0;
+	unsigned int i = 0;
+	//insert
+	for( ; i < MAX_BUCKET_ENTRIES_IN_PAGE * 3; i++ )
+	{
+		unsigned int key = i * N + 1;	//try with 0
+		BucketDataEntry me = (BucketDataEntry){key, (RID){i + 1, (unsigned int)'A'}};
+		MetaDataSortedEntries mdse(fileHandle, 1, (unsigned int)key, (void*)&me);
+		mdse.insertEntry();
+	}
+	i = 0;
+	//print
+	std::cout << endl << "primary data file:" << endl;
+	printFile(fileHandle._primBucketDataFileHandler);
+	std::cout << endl << "overflow data file:" << endl;
+	printFile(fileHandle._overBucketDataFileHandler);
+	//delete
+	for( i = MAX_BUCKET_ENTRIES_IN_PAGE - 2; i < MAX_BUCKET_ENTRIES_IN_PAGE * 3; i+=2 )
+	{
+		unsigned int key = i * N + 1;
+		BucketDataEntry me = (BucketDataEntry){key, (RID){i + 1, (unsigned int)'A'}};
+		MetaDataSortedEntries mdse(fileHandle, 1, (unsigned int)key, (void*)&me);
+		if( (errCode = mdse.deleteEntry(me._rid)) != 0 )
+		{
+			cout << "error : " << errCode;
+			exit(errCode);
+		}
+		if( i % 100 == 0 )
+		{
+			//print
+			std::cout << endl << "primary data file:" << endl;
+			printFile(fileHandle._primBucketDataFileHandler);
+			std::cout << endl << "overflow data file:" << endl;
+			printFile(fileHandle._overBucketDataFileHandler);
+		}
+	}
+	//print
+	std::cout << endl << "primary data file:" << endl;
+	printFile(fileHandle._primBucketDataFileHandler);
+	std::cout << endl << "overflow data file:" << endl;
+	printFile(fileHandle._overBucketDataFileHandler);
+}
+
 int testCase_1(const string &indexFileName)
 {
     // Functions tested
@@ -83,7 +198,11 @@ int testCase_1(const string &indexFileName)
         return fail;
     }
 
-    test(ixfileHandle);
+    test3(ixfileHandle, numberOfPages);
+
+    //test2(ixfileHandle, numberOfPages);
+
+    /*test(ixfileHandle);
 
     std::cout << endl << "primary data file:" << endl;
 	printFile(ixfileHandle._primBucketDataFileHandler);
@@ -96,7 +215,7 @@ int testCase_1(const string &indexFileName)
 		cout << "error: " << rc;
 	std::cout << endl << "meta data file:" << endl;
 	printFile(ixfileHandle._metaDataFileHandler);
-
+     */
     //add by me
 	std::cout << "meta file:" << endl << endl;
 	printFile(ixfileHandle._metaDataFileHandler);

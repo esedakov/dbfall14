@@ -159,35 +159,57 @@ struct MetaDataEntry
 
 struct BucketDataEntry
 {
-	unsigned int _key;
+	void* _key;
 	RID _rid;
 };
 
-#define SZ_OF_BUCKET_ENTRY sizeof(BucketDataEntry)
+//#define SZ_OF_BUCKET_ENTRY sizeof(BucketDataEntry)
 
-#define MAX_BUCKET_ENTRIES_IN_PAGE ( (PAGE_SIZE - sizeof(unsigned int) * 2) / SZ_OF_BUCKET_ENTRY )
+//#define MAX_BUCKET_ENTRIES_IN_PAGE ( (PAGE_SIZE - sizeof(unsigned int) * 2) / SZ_OF_BUCKET_ENTRY )
+
+class PFMExtension
+{
+	PFMExtension(IXFileHandle handle, const BUCKET_NUMBER bkt_number);
+	RC translateVirtualToPhysical(PageNum& physicalPageNum, const BUCKET_NUMBER bktNumber, const PageNum virtalPageNum);
+	RC getPage(const BUCKET_NUMBER bkt_number, const PageNum pageNumber);
+	RC getTuple(void* tuple, const BUCKET_NUMBER bkt_number, const PageNum pageNumber, const int slotNumber);
+	RC shiftRecordsToStart(
+			const BUCKET_NUMBER bkt_number, const PageNum startingInPageNumber, const int startingFromSlotNumber, unsigned int szInBytes);
+	RC shiftRecordsToEnd(
+			const BUCKET_NUMBER bkt_number, const PageNum startingInPageNumber, const int startingFromSlotNumber, unsigned int szInBytes);
+	RC deleteTuple(const BUCKET_NUMBER bkt_number, const PageNum pageNumber, const int slotNumber);
+	RC insertTuple(const BUCKET_NUMBER bkt_number, const PageNum pageNumber, const int slotNumber);
+private:
+	IXFileHandle _handle;
+	void* _buffer;
+	PageNum _curVirtualPage;
+};
 
 class MetaDataSortedEntries
 {
 public:
-	MetaDataSortedEntries(IXFileHandle& ixfilehandle, BUCKET_NUMBER bucket_number, unsigned int key, const void* entry);
+	MetaDataSortedEntries(IXFileHandle& ixfilehandle, BUCKET_NUMBER bucket_number, const Attribute& attr, const void* key, const void* entry);
 	~MetaDataSortedEntries();
 	void insertEntry();
-	bool searchEntry(RID& position, BucketDataEntry& entry);
+	RC searchEntry(RID& position, void* entry);
 	RC deleteEntry(const RID& rid);
 protected:
-	int searchEntryInPage(RID& result, int indexStart, int indexEnd);
-	bool searchEntryInArrayOfPages(RID& position, int start, int end);
+	int searchEntryInPage(RID& result, const PageNum& pageNumber, const int indexStart, const int indexEnd);
+	bool searchEntryInArrayOfPages(RID& position, const int start, const int end);
 	RC getPage();
-	void addPage();
-	RC removePageRecord();
-	RC erasePageFromHeader(FileHandle& fileHandle);
+	RC translateToPageNumber(const PageNum& pagenumber, PageNum& result);
+	//PageDirSlot* getRecordSlotFromCurrentPage(unsigned int slotNumber);
+	RC getTuple(const PageNum pageNumber, const unsigned int slotNumber, void* entry)
+	//void addPage();
+	//RC removePageRecord();
+	//RC erasePageFromHeader(FileHandle& fileHandle);
 	unsigned int numOfPages();
 	RC splitBucket();
 	RC mergeBuckets();
 private:
 	IXFileHandle _ixfilehandle;
-	unsigned int _key;
+	void* _key;
+	Attribute _attr;
 	const void* _entryData;
 	int _curPageNum;
 	void* _curPageData;
