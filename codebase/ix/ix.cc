@@ -18,6 +18,7 @@
  * -46 => neither lower nor higher bucket is chosen by the hash function
  *
  * -50 = key was not found
+ * -51 = cannot shift from one page more data than can fit inside the next page
  */
 
 IndexManager* IndexManager::_index_manager = 0;
@@ -513,11 +514,11 @@ RC IndexManager::insertEntry(IXFileHandle &ixfileHandle, const Attribute &attrib
 	unsigned int hkey = hash_at_specified_level(ixfileHandle._info->N, ixfileHandle._info->Level, hash(attribute, key));
 
 	//TODO: key needs to become void*
-
+/*
 	BucketDataEntry me = (BucketDataEntry){key, (RID){rid.pageNum, rid.slotNum}};
 	MetaDataSortedEntries mdse(ixfileHandle, hkey, (unsigned int)key, (void*)&me);
 	mdse.insertEntry();
-
+*/
 	//success
 	return errCode;
 }
@@ -530,7 +531,7 @@ RC IndexManager::deleteEntry(IXFileHandle &ixfileHandle, const Attribute &attrib
 
 	//hashed key
 	unsigned int hkey = hash_at_specified_level(ixfileHandle._info->N, ixfileHandle._info->Level, hash(attribute, key));
-
+/*
 	BucketDataEntry me = (BucketDataEntry){key, (RID){rid.pageNum, rid.slotNum}};
 
 	//TODO, change the key
@@ -542,7 +543,7 @@ RC IndexManager::deleteEntry(IXFileHandle &ixfileHandle, const Attribute &attrib
 		cout << "error : " << errCode;
 		exit(errCode);
 	}
-
+*/
 	//success
 	return errCode;
 }
@@ -829,13 +830,14 @@ RC PFMExtension::translateVirtualToPhysical(PageNum& physicalPageNum, const BUCK
 		//determine which page to load
 
 		//first check whether the page exists inside overflow file (i.e. is virtual page points beyond the file)
-		if( (virtualPageNum - 1) >= _handle._info->_overflowPageIds[bkt_number].size() )
+		unsigned int size = _handle->_info->_overflowPageIds[bkt_number].size();
+		if( (virtualPageNum - 1) >= size )
 		{
 			return -42;	//accessing a page beyond bucket's data
 		}
 
 		//get physical overflow page number corresponding to the "virtual page number"
-		physicalPageNum = _handle._info->_overflowPageIds[bkt_number][virtualPageNum - 1];
+		physicalPageNum = _handle->_info->_overflowPageIds[bkt_number][virtualPageNum - 1];
 	}
 
 	//success
@@ -854,30 +856,36 @@ RC PFMExtension::getPage(const BUCKET_NUMBER bkt_number, const PageNum pageNumbe
 		return errCode;
 	}
 
-	if( _curVirtualPage > 0 )	//if inside the overflow file
+	FileHandle handle;
+	if( pageNumber > 0 )
 	{
-		//retrieve the data and store in the current buffer
-		if( (errCode = _handle._overBucketDataFileHandler.readPage(physicalPageNumber, _buffer)) != 0 )
-		{
-			return errCode;
-		}
+		//if inside the overflow file
+		handle = _handle->_overBucketDataFileHandler;
 	}
 	else
 	{
-		//then, inside the "primary page"
-		//read the page from the primary file
-		if( (errCode = _handle._primBucketDataFileHandler.readPage(physicalPageNumber, _buffer)) != 0 )
-		{
-			return errCode;
-		}
+		//if inside the primary file
+		handle = _handle->_primBucketDataFileHandler;
+	}
+
+	//check if physical page number is beyond boundaries
+	if( physicalPageNumber >= handle.getNumberOfPages() )
+	{
+		return -27;
+	}
+
+	//retrieve the data and store in the current buffer
+	if( (errCode = handle.readPage(physicalPageNumber, _buffer)) != 0 )
+	{
+		return errCode;
 	}
 
 	//success
 	return errCode;
 }
 
-PFMExtension::PFMExtension(IXFileHandle handle, BUCKET_NUMBER bkt_number)
-: _handle(handle), _buffer(malloc(PAGE_SIZE)), _curVirtualPage(0)
+PFMExtension::PFMExtension(IXFileHandle& handle, BUCKET_NUMBER bkt_number)
+: _handle(&handle), _buffer(malloc(PAGE_SIZE)), _curVirtualPage(0)
 {
 	RC errCode = 0;
 	if( (errCode = getPage(bkt_number, _curVirtualPage)) != 0 )
@@ -897,19 +905,12 @@ RC PFMExtension::getTuple(void* tuple, BUCKET_NUMBER bkt_number, const unsigned 
 		return -11; //data is corrupted
 	}
 
-	FileHandle handle = ( _curVirtualPage == 0 ? _handle._primBucketDataFileHandler : _handle._overBucketDataFileHandler );
+	FileHandle handle = ( _curVirtualPage == 0 ? _handle->_primBucketDataFileHandler : _handle->_overBucketDataFileHandler );
 
-	if( pageNumber == 0 || pageNumber >= handle.getNumberOfPages() )
+	/*if( pageNumber == 0 || pageNumber >= handle.getNumberOfPages() )
 	{
 		return -27; //rid is not setup correctly
-	}
-
-	//translate to physical page number
-	PageNum physicalPageNumber = 0;
-	if( (errCode = translateVirtualToPhysical(physicalPageNumber, bkt_number, pageNumber)) != 0 )
-	{
-		return errCode;
-	}
+	}*/
 
 	//if necessary read in the page
 	if( pageNumber != _curVirtualPage )
@@ -919,8 +920,6 @@ RC PFMExtension::getTuple(void* tuple, BUCKET_NUMBER bkt_number, const unsigned 
 		//read data page
 		if( (errCode = getPage(bkt_number, pageNumber)) != 0 )
 		{
-			//deallocate dataPage
-			free(dataPage);
 
 			//read failed
 			return errCode;
@@ -943,8 +942,6 @@ RC PFMExtension::getTuple(void* tuple, BUCKET_NUMBER bkt_number, const unsigned 
 	//check if rid is correct in terms of indexed slot
 	if( slotNumber >= numSlots )
 	{
-		//deallocate data page
-		free(dataPage);
 
 		return -23; //rid is not setup correctly
 	}
@@ -982,56 +979,685 @@ RC PFMExtension::getTuple(void* tuple, BUCKET_NUMBER bkt_number, const unsigned 
 	//end section for project 2
 
 	//copy record contents
-	memcpy(_buffer, ptrRecord, szRecord);
+	memcpy(tuple, ptrRecord, szRecord);
 
 	//return success
 	return errCode;
 }
 
-RC PFMExtension::shiftRecordsToStart(
-		const BUCKET_NUMBER bkt_number, const PageNum startingInPageNumber, const int startingFromSlotNumber, unsigned int szInBytes)
+//startingInPageNumber is a virtual page number
+RC PFMExtension::shiftRecordsToStart //TESTED, seems to work
+	(const BUCKET_NUMBER bkt_number, const PageNum startingInPageNumber, const int startingFromSlotNumber)
 {
 	RC errCode = 0;
 
+	//if necessary read in the page
+	if( startingInPageNumber != _curVirtualPage )
+	{
+		_curVirtualPage = startingInPageNumber;
+
+		//read data page
+		if( (errCode = getPage(bkt_number, startingInPageNumber)) != 0 )
+		{
+			//read failed
+			return errCode;
+		}
+	}
+
+	FileHandle handle = ( _curVirtualPage == 0 ? _handle->_primBucketDataFileHandler : _handle->_overBucketDataFileHandler );
+
+	PageNum physicalPageNumber = 0;
+	if( (errCode = translateVirtualToPhysical(physicalPageNumber, bkt_number, startingInPageNumber)) != 0 )
+	{
+		return errCode;
+	}
+
+	//get pointer to the end of directory slots
+	PageDirSlot* startOfDirSlot = (PageDirSlot*)((char*)_buffer + PAGE_SIZE - 2 * sizeof(unsigned int));
+
+	//find out number of directory slots
+	unsigned int* numSlots = ((unsigned int*)startOfDirSlot);
+
+	//check if rid is correct in terms of indexed slot
+	if( startingFromSlotNumber >= *numSlots )
+	{
+		return -23; //rid is not setup correctly
+	}
+
+	//pointer to the start of the list of directory slots
+	PageDirSlot* ptrEndOfDirSlot = (PageDirSlot*)( startOfDirSlot - *numSlots );
+
+	unsigned int* ptrVarForFreeSpace = (unsigned int*)( (char*)(startOfDirSlot) + sizeof(unsigned int) );
+
+	unsigned int offsetToFreeSpace = *ptrVarForFreeSpace;
+
+	//                                                      [offset, size]
+	//   L1        L2       L3          Lk                    \        /
+	//<-------> <------> <------>   <------->                  \      /
+	//[key|rid][key|rid][key|rid]...[key|rid][                ][slot k]...[slot 3][slot 2][slot 1][num slots][offset to free space]
+	//^                                     ^                 ^                                  ^          ^                     ^
+	//|                                     |                 |                                  |          |                     |
+	//+-------------------------------------+-----------------+----------------------------------+----------+---------------------+
+	//          list of tuples               free space if any        page directory slots
+
+	//when item is shifted to the start then:
+	//1. tuples <key, rid> are shifted to the start of the page by L1 amount which is stored inside the first slot
+
+	PageDirSlot* deletedSlot = startOfDirSlot - (startingFromSlotNumber + 1);
+
+	char *destination = (char*)_buffer + deletedSlot->_offRecord;
+	char *startOfShiftingBlock = destination + deletedSlot->_szRecord;
+	char *endOfShiftingBlock = (char*)_buffer + *ptrVarForFreeSpace;
+	unsigned int szToShift = endOfShiftingBlock - startOfShiftingBlock;
+
+	//update the offset to free space
+	offsetToFreeSpace -= deletedSlot->_szRecord;
+
+	if( szToShift > 0 )
+		memmove(destination, startOfShiftingBlock, szToShift);
+
+	//erase the record
+	memset( (char*)_buffer + offsetToFreeSpace, 0, ptrEndOfDirSlot->_szRecord );
+
+	bool needToSavePage = true;
+
+	//shift slots
+	//       copy array of slots
+	//   +-------------------------+ => move in this direction to replace say slot # 1 (assuming it is the slot to be deleted)
+	//   v                         v
+	//...[slot k]...[slot 3][slot 2][slot 1]...
+	//   ^                                 ^
+	//   |                                 |
+	// ptrEndOfDirSlot          startOfDirSlot
+	unsigned int numOfSlotsToShift = (*numSlots - 1 - startingFromSlotNumber) * sizeof(PageDirSlot);
+	if( numOfSlotsToShift > 0 )
+	{
+		memmove( ptrEndOfDirSlot + 1, ptrEndOfDirSlot, numOfSlotsToShift );
+		//fix offsets since they are messed up due to slots
+		PageDirSlot* curEntry = deletedSlot;
+		unsigned int offset = 0;
+		if( (deletedSlot + 1) != startOfDirSlot )
+			offset = (deletedSlot + 1)->_offRecord + (deletedSlot + 1)->_szRecord;
+		for( ; curEntry != ptrEndOfDirSlot; curEntry -= 1 )
+		{
+			curEntry->_offRecord = offset;
+			offset += curEntry->_szRecord;
+		}
+	}
+
+	//null the last slot
+	memset(ptrEndOfDirSlot, 0, sizeof(PageDirSlot));
+
+	bool decreaseNumberOfSlotsInCurrentPage = true;
+
+	//2. if next page exists
+	if( _curVirtualPage + 1 <= _handle->_info->_overflowPageIds[bkt_number].size() )
+	{
+		//	2.1.1 check if first entry inside the page can fit in the former page, if not go to step 3
+		//		=> free space in question is calculated as follows:
+		//			PAGE_SIZE - offset_to_free_space - num_slots * size_of_slot - 2 * size_of_integer
+
+		unsigned int freeSpace =
+				(PAGE_SIZE - *ptrVarForFreeSpace - *numSlots * sizeof(PageDirSlot) - 2 * sizeof(unsigned int)) + deletedSlot->_szRecord;
+
+		//allocate a separate buffer for holding the current page contents
+		void* dataBuffer = malloc(PAGE_SIZE);
+		memcpy(dataBuffer, _buffer, PAGE_SIZE);
+
+		//read data page
+		if( (errCode = getPage(bkt_number, _curVirtualPage + 1)) != 0 )
+		{
+			//deallocate dataPage
+			free(dataBuffer);
+
+			//read failed
+			return errCode;
+		}
+
+		//calculate size of the first record in the next page (ptrEndOfDirSlot and numSlots are used as pointers in the next page)
+		unsigned int szOfFirstRecordInNextPage = (startOfDirSlot - 1)->_szRecord;
+
+		if( szOfFirstRecordInNextPage <= freeSpace && *numSlots > 0 )
+		{
+			decreaseNumberOfSlotsInCurrentPage = false;
+			//	2.1.2 copy this item (first record from the next page) after the record # k
+
+			memcpy( (char*)dataBuffer + offsetToFreeSpace, _buffer, szOfFirstRecordInNextPage );
+
+			//copy back the contents of the current page to the _buffer
+			memcpy( _buffer, dataBuffer, PAGE_SIZE );
+
+			//	2.1.3 insert information into new slot into page directory to account for shifted record
+
+			ptrEndOfDirSlot->_offRecord = offsetToFreeSpace;
+			ptrEndOfDirSlot->_szRecord = szOfFirstRecordInNextPage;
+			*ptrVarForFreeSpace = offsetToFreeSpace + szOfFirstRecordInNextPage;
+
+			//	2.1.4 save page before recursively calling this function on the next page
+			if( (errCode = handle.writePage(physicalPageNumber, _buffer)) != 0 )
+			{
+				free(dataBuffer);
+				return errCode;
+			}
+			needToSavePage = false;
+
+			//	2.1.5 call shift to start on the next page
+			if( (errCode = shiftRecordsToStart(bkt_number, _curVirtualPage + 1, 0)) != 0 )
+			{
+				free(dataBuffer);
+				return errCode;
+			}
+		}
+		else
+		{
+			//copy back the contents of the current page to the _buffer
+			memcpy( _buffer, dataBuffer, PAGE_SIZE );
+		}
+
+		//deallocate data buffer
+		free(dataBuffer);
+	}
+
+	//if the next page is non-existent or empty, then
+	if( decreaseNumberOfSlotsInCurrentPage == true )
+	{
+		//	2.2.1 change number slots, offset to free space
+		//update number of slots
+		*numSlots = *numSlots - 1;
+
+		//update offset to free space
+		*ptrVarForFreeSpace = offsetToFreeSpace;
+	}
+	//3. save the page and return success
+	//save page before recursively calling this function on the next page
+	if( needToSavePage )
+	{
+		if( (errCode = handle.writePage(physicalPageNumber, _buffer)) != 0 )
+		{
+			return errCode;
+		}
+	}
+	//success
+	return errCode;
+}
+
+/*RC PFMExtension::updatePageSizeInHeader(FileHandle& fileHandle, const PageNum pageNumber, const unsigned int freeSpace)
+{
+	RC errCode = 0;
+
+	//start from page 0 (which is the first header)
+	PageNum headerPageId = 0;
+
+	//allocate data buffer for storing the current header page
+	void* data = malloc(PAGE_SIZE);
+
+	//create pointer for header
+	Header* hPage = NULL;
+
+	bool found = false;
+
+	//loop thru header pages
+	do
+	{
+		//get the first header page
+		if( (errCode = fileHandle.readPage((PageNum)headerPageId, data)) != 0 )
+		{
+			//deallocate data
+			free(data);
+
+			//return error
+			return errCode;
+		}
+
+		//cast data to Header
+		hPage = (Header*)data;
+
+		//loop thru PageInfo tuples
+		for( unsigned int i = 0; i < NUM_OF_PAGE_IDS; i++ )
+		{
+			if( hPage->_arrOfPageIds[i]._pageid == pageNumber )
+			{
+				//found the page record
+				hPage->_arrOfPageIds[i]._numFreeBytes = freeSpace;
+				found = true;
+				//quit
+				break;
+			}
+		}
+
+		if( found )
+			break;
+
+		//go to next header page
+		headerPageId = hPage->_nextHeaderPageId;
+
+	} while(headerPageId > 0);
+
+	if( found == false )
+	{
+		//have not found the appropriate page
+		return -45;
+	}
+
+	//write back the header page
+	if( (errCode = fileHandle.writePage((PageNum)headerPageId, data)) != 0 )
+	{
+		//deallocate data
+		free(data);
+
+		//return error
+		return errCode;
+	}
+
+	//success
+	return errCode;
+}*/
+
+RC PFMExtension::shiftRecursivelyToEnd //NOT TESTED
+	(const BUCKET_NUMBER bkt_number, const PageNum currentPageNumber, const unsigned int startingFromSlotNumber,
+	map<void*, unsigned int> slotsToShiftFromPriorPage)
+{
+	RC errCode = 0;
+
+	//if necessary read in the page
+	if( currentPageNumber != _curVirtualPage )
+	{
+		_curVirtualPage = currentPageNumber;
+
+		//read data page
+		if( (errCode = getPage(bkt_number, currentPageNumber)) != 0 )
+		{
+			//read failed
+			return errCode;
+		}
+	}
+
+	FileHandle handle = ( _curVirtualPage == 0 ? _handle->_primBucketDataFileHandler : _handle->_overBucketDataFileHandler );
+
+	PageNum physicalPageNumber = 0;
+	if( (errCode = translateVirtualToPhysical(physicalPageNumber, bkt_number, currentPageNumber)) != 0 )
+	{
+		return errCode;
+	}
+
+	//get pointer to the end of directory slots
+	PageDirSlot* startOfDirSlot = (PageDirSlot*)((char*)_buffer + PAGE_SIZE - 2 * sizeof(unsigned int));
+
+	//find out number of directory slots
+	unsigned int* numSlots = ((unsigned int*)startOfDirSlot);
+
+	//check if rid is correct in terms of indexed slot
+	if( startingFromSlotNumber > *numSlots )
+	{
+		return -23; //rid is not setup correctly
+	}
+
+	//pointer to the start of the list of directory slots
+	PageDirSlot* ptrEndOfDirSlot = (PageDirSlot*)( startOfDirSlot - *numSlots );
+
+	unsigned int* ptrVarForFreeSpace = (unsigned int*)( (char*)(startOfDirSlot) + sizeof(unsigned int) );
+
+	//                                                      [offset, size]
+	//   L1        L2       L3          Lk                    \        /
+	//<-------> <------> <------>   <------->                  \      /
+	//[key|rid][key|rid][key|rid]...[key|rid][                ][slot k]...[slot 3][slot 2][slot 1][num slots][offset to free space]
+	//^                                     ^                 ^                                  ^          ^                     ^
+	//|                                     |                 |                                  |          |                     |
+	//+-------------------------------------+-----------------+----------------------------------+----------+---------------------+
+	//          list of tuples               free space if any        page directory slots
+
+	//when item is shifted to the start then:
+	//1. determine number of slots to be erased/shifted_out from this page
+	//	1.1 measure size of the incoming data. If the size of this data exceeds the page, then fail (cannot shift in more than page size)
+
+	unsigned int szOfDataToShiftIn = 0;
+	map<void*, unsigned int>::iterator shiftInIter = slotsToShiftFromPriorPage.begin(), shiftInMax = slotsToShiftFromPriorPage.end();
+	for( ; shiftInIter != shiftInMax; shiftInIter++ )
+	{
+		szOfDataToShiftIn += shiftInIter->second;
+	}
+
+	//update by the amount of slots to be inserted in
+	unsigned int szForExtraSlots = sizeof(PageDirSlot) * slotsToShiftFromPriorPage.size();
+
+	//	1.2 determine number of existing records that has to be erased to fit new data
+
+	//determine amount of free space in this page
+	//....[key|rid][                        ][slot k]....
+	//             ^                         ^
+	//             |                         |
+	// offset to free space            ptrEndOfDirSlot
+	unsigned int freeSpaceInPage = (unsigned int)( (char*)ptrEndOfDirSlot - (char*)((char*)_buffer + (unsigned int)*ptrVarForFreeSpace) );
+
+	unsigned int amountOfSpaceToBeFreedUp = 0;
+	unsigned int numOfSlotsToBeErased = 0;
+	PageDirSlot* eraseSlotsTillThisOne = ptrEndOfDirSlot, *currentSlot = NULL;
+
+	//if existing free space is not enough, then
+	if( freeSpaceInPage < szOfDataToShiftIn + szForExtraSlots )
+	{
+		//iteratively go thru slots (from end to start) to determine the amount of records that need to be erased
+		currentSlot = ptrEndOfDirSlot;
+		while( currentSlot != startOfDirSlot )
+		{
+			//sum up the space of current slot
+			amountOfSpaceToBeFreedUp += currentSlot->_szRecord;
+			numOfSlotsToBeErased++;
+			//update by the amount of freed up slot
+			if( numOfSlotsToBeErased < slotsToShiftFromPriorPage.size() )
+				szForExtraSlots -= sizeof(PageDirSlot);
+			//check if this space is enough
+			if( amountOfSpaceToBeFreedUp + freeSpaceInPage >= szOfDataToShiftIn + szForExtraSlots )
+				break;
+			//go to the next slot
+			currentSlot = currentSlot + 1;
+		}
+		//sanity check - determine if we have found enough space
+		if( amountOfSpaceToBeFreedUp + freeSpaceInPage < szOfDataToShiftIn + szForExtraSlots )
+		{
+			return -51;	//cannot shift too much data into page
+		}
+		eraseSlotsTillThisOne = currentSlot + 1;	//currentSlot points at the last slot that still to be erased, so increment to next one
+	}
+
+	//	1.3 allocate for each erased slot a separate small buffer to hold its copy and insert each such buffer into a map data-structure
+	//		it will then be passed to a recursive function for shifting into the next page
+
+	std::map<void*, unsigned int> shiftRecordsToNextPage;
+	currentSlot = ptrEndOfDirSlot;
+	while( currentSlot != eraseSlotsTillThisOne )
+	{
+		//determine size of the record
+		unsigned int szOfRecord = currentSlot->_szRecord;
+		//allocate buffer
+		void* buffer = malloc(szOfRecord);
+		//copy record into the buffer
+		memcpy(buffer, (char*)_buffer + currentSlot->_offRecord, szOfRecord);
+		//insert new entry into map for this record
+		shiftRecordsToNextPage.insert( std::pair<void*, unsigned int>(buffer, szOfRecord) );
+	}
+
+	//2. shift array of records from the designated one (i.e. startingFromSlotNumber) to the one that precedes the first item that will
+	//	 be erased (determined in step 1)
+
+	//                       to be deleted
+	//      shift by              |
+	//    ___size X___            |  free space
+	//   /             \          v /          \
+	//[ ][   ][  ][ ][  ][  ][ ][XX]            |
+	//     ^                     \             /
+	//     |                     shift by size X
+	// insert_in
 	//
+	//[ ][   ][  ][ ][  ][  ][ ][XX] => shift by size 'X'
+	//   ^                     ^
+	//   |                     |
+	// start                  end
+	//star is specified by startingFromSlotNumber
+	//end is right before the last item that will be deleted due to shift (on image item to be deleted has 'XX' content in it)
+
+	PageDirSlot* ptrStartSlot = startOfDirSlot - startingFromSlotNumber;
+	void* startOfShifting = (char*)_buffer + ptrStartSlot->_offRecord + ptrStartSlot->_szRecord;
+
+	//if it is not the last item that the data is inserted, then perform a shift (if it is the last item, do not do shifting)
+	if( startingFromSlotNumber != *numSlots )
+	{
+		void* endOfShifting = ((char*)_buffer + eraseSlotsTillThisOne->_offRecord) + eraseSlotsTillThisOne->_szRecord;
+		unsigned int amountToShift = szOfDataToShiftIn;
+
+		if( szOfDataToShiftIn > 0 )
+		{
+			memmove((char*)startOfShifting + amountToShift, startOfShifting, amountToShift);
+		}
+	}
+
+	//3. copy information into freed up array of records AND setup slot offsets and size attributes
+
+	currentSlot = eraseSlotsTillThisOne - 1;
+	shiftInIter = slotsToShiftFromPriorPage.begin();
+	shiftInMax = slotsToShiftFromPriorPage.end();
+	for( ; shiftInIter != shiftInMax; shiftInIter++ )
+	{
+		//copy the data portion for this record
+		memcpy( startOfShifting, shiftInIter->first, shiftInIter->second );
+		//update slot information
+		currentSlot->_szRecord = shiftInIter->second;
+		currentSlot->_offRecord = (unsigned int)((char*)startOfShifting - (char*)_buffer);
+		//update starting position of shift
+		startOfShifting = (char*)startOfShifting + shiftInIter->second;
+		//update current slot
+		currentSlot = currentSlot + 1;
+	}
+
+	//4. update offset to free space
+
+	//  empty space if any that goes after the last slot
+	//  |
+	//  v
+	//[   ][slot k][slot k-1]...[slot N]...[slot 2][slot 1][ORIGINAL NUM OF SLOTS][OFFSET TO FREE SPACE]
+	//^    \                   /                           ^          |
+	//|     +-----------------+                            |          v
+	//|          new slots                                 |          N where N < k
+	//|                                                    |
+	//+-- currentSlot points                               |
+	//    at this position                          startOfDirSlot
+
+	//[ ][4][3][2][1]
+	//^             ^
+	//current       start   (keep in mind physical address of start is greater than of the current)
+
+	//number of extra slots
+	int numExtraSlots = ( (startOfDirSlot - currentSlot) / sizeof(PageDirSlot) - 1) - *numSlots;
+
+	//update free space
+	*ptrVarForFreeSpace =
+			amountOfSpaceToBeFreedUp + freeSpaceInPage - szOfDataToShiftIn -
+			(numExtraSlots > 0 ? numExtraSlots * sizeof(PageDirSlot) : 0);
+
+	//5, if there are items to shift to the next page
+	if( shiftRecordsToNextPage.size() > 0 )
+	{
+		//	5.1 AND if the next page does not exist, then add a new page
+		if( startingFromSlotNumber + 1 <= _handle->_info->_overflowPageIds[bkt_number].size() )
+		{
+			//allocate new page data buffer
+			void* newPageDataBuffer = malloc(PAGE_SIZE);
+			memset(newPageDataBuffer, 0, PAGE_SIZE);
+
+			//add the page to this file
+			if( (errCode = addPage(newPageDataBuffer, bkt_number)) != 0 )
+			{
+				free(newPageDataBuffer);
+				shiftInIter = shiftRecordsToNextPage.begin();
+				shiftInMax = shiftRecordsToNextPage.end();
+				for( ; shiftInIter != shiftInMax; shiftInIter++ )
+				{
+					free( shiftInIter->first );
+				}
+				return errCode;
+			}
+
+			//deallocate data page buffer
+			free(newPageDataBuffer);
+		}
+		//	5.2 call this function (recursively) on the next page with the map data-structure composed in step 1
+		if( (errCode = shiftRecursivelyToEnd(
+				bkt_number, currentPageNumber + 1, 0, shiftRecordsToNextPage)) != 0 )
+		{
+			//free the buffers
+			shiftInIter = shiftRecordsToNextPage.begin();
+			shiftInMax = shiftRecordsToNextPage.end();
+			for( ; shiftInIter != shiftInMax; shiftInIter++ )
+			{
+				free( shiftInIter->first );
+			}
+			return errCode;
+		}
+	}
+
+	//6. iterate over the map that stored <void*, unsigned int> information about shifted records => free up all void* buffers
+	shiftInIter = shiftRecordsToNextPage.begin();
+	shiftInMax = shiftRecordsToNextPage.end();
+	for( ; shiftInIter != shiftInMax; shiftInIter++ )
+	{
+		free( shiftInIter->first );
+	}
 
 	//success
 	return errCode;
 }
 
-RC PFMExtension::shiftRecordsToEnd(
-		const BUCKET_NUMBER bkt_number, const PageNum startingInPageNumber, const int startingFromSlotNumber, unsigned int szInBytes)
+RC PFMExtension::addPage(const void* dataPage, const BUCKET_NUMBER bkt_number)	//NOT TESTED
 {
 	RC errCode = 0;
 
-	//
+	PagedFileManager* _pfm = PagedFileManager::instance();
+
+	unsigned int headerPageId = 0, dataPageId = 0;
+	//insert page into overflow data file
+	if( (errCode = _pfm->getLastHeaderPage(_handle->_overBucketDataFileHandler, headerPageId)) != 0 )
+	{
+		return errCode;
+	}
+
+	unsigned int freeSpaceLeft = 0;
+
+	if( (errCode = _pfm->getDataPage(
+			_handle->_overBucketDataFileHandler, (unsigned int)-1, dataPageId, headerPageId, freeSpaceLeft)) != 0 )
+	{
+		return errCode;
+	}
+
+	if( (errCode = _handle->_overBucketDataFileHandler.writePage(dataPageId, dataPage)) != 0 )
+	{
+		return errCode;
+	}
+
+	int newOrderValue = 0;
+	//insert entry into map with meta-data information (i.e. list of tuples for overflow page IDs)
+	//but first check if there is an item inside the map corresponding to this bucket number
+	if( _handle->_info->_overflowPageIds.find(bkt_number) != _handle->_info->_overflowPageIds.end() )
+	{
+		//check whether there are items
+		if( _handle->_info->_overflowPageIds[bkt_number].size() > 0 )
+		{
+			//if there are then the new order is the last one + 1, or in another words the current size of the map
+			newOrderValue = _handle->_info->_overflowPageIds[bkt_number].size();
+		}
+	}
+	else
+	{
+		//insert an entry corresponding to this bucket number
+		_handle->_info->_overflowPageIds.insert(
+				std::pair<BUCKET_NUMBER, std::map<int, unsigned int> >(
+						bkt_number, std::map<int, unsigned int>())
+		);
+	}
+
+	//insert an entry
+	_handle->_info->_overflowPageIds[bkt_number].insert( std::pair<int, unsigned int>(newOrderValue, dataPageId) );
 
 	//success
 	return errCode;
 }
 
-RC PFMExtension::deleteTuple(const BUCKET_NUMBER bkt_number, const PageNum pageNumber, const int slotNumber)
+RC PFMExtension::shiftRecordsToEnd	//NOT TESTED
+(const BUCKET_NUMBER bkt_number, const PageNum startingInPageNumber, const int startingFromSlotNumber, unsigned int szInBytes)
 {
 	RC errCode = 0;
 
-	//
+	//allocate single slot
+	void* singleSlotSpace = malloc(szInBytes);
+	memset(singleSlotSpace, 0, szInBytes);
+
+	//call recursive shifter
+	if( (errCode = shiftRecursivelyToEnd(
+			bkt_number, startingInPageNumber, startingFromSlotNumber, map<void*, unsigned int>())) != 0 )
+	{
+		free(singleSlotSpace);
+		return errCode;
+	}
+
+	free(singleSlotSpace);
 
 	//success
 	return errCode;
 }
 
-RC PFMExtension::insertTuple(const BUCKET_NUMBER bkt_number, const PageNum pageNumber, const int slotNumber)
+RC PFMExtension::removePage(const BUCKET_NUMBER bkt_number, const PageNum pageNumber)
 {
 	RC errCode = 0;
 
+	//remove record from the overflowPageId map
+	if( _handle->_info->_overflowPageIds.find(bkt_number) == _handle->_info->_overflowPageIds.end() )
+	{
+		//no overflow page is found in the local map
+		return -44;
+	}
+
+	//determine physical page number of the one to be removed
+	PageNum physPageNumber = _handle->_info->_overflowPageIds[bkt_number][pageNumber - 1];
+
+	//remove its record
+	_handle->_info->_overflowPageIds[bkt_number].erase( pageNumber - 1 );
+
+	return errCode;
+}
+
+RC PFMExtension::deleteTuple(const BUCKET_NUMBER bkt_number, const PageNum pageNumber, const int slotNumber)//, bool lastPageIsEmpty)
+{
+	RC errCode = 0;
+
+	if( (errCode = shiftRecordsToStart(bkt_number, pageNumber, slotNumber)) != 0 )
+	{
+		return errCode;
+	}
+
+	//unsigned int lastPageNumber = _handle->_info->_overflowPageIds[bkt_number].size() - 1;
 	//
+	//if( (errCode = getPage(bkt_number, lastPageNumber)) != 0 )
+	//{
+	//	return errCode;
+	//}
+	//
+	//lastPageIsEmpty = (unsigned int*)((char*)_buffer + PAGE_SIZE - 2 * sizeof(unsigned int)) == 0;
+
+	//success
+	return errCode;
+}
+
+RC PFMExtension::insertTuple(const void* tupleData, unsigned int tupleLength, const BUCKET_NUMBER bkt_number,
+		const PageNum pageNumber, const int slotNumber) //, bool newPageIsCreated)
+{
+	RC errCode = 0;
+
+	map<void*, unsigned int> slotToInsert;
+
+	slotToInsert.insert( std::pair<void*, unsigned int>(tupleData, tupleLength) );
+
+	//unsigned int numPagesInOverflowFile = _handle->_overBucketDataFileHandler.getNumberOfPages();
+
+	if( (errCode = shiftRecursivelyToEnd(
+			bkt_number, pageNumber, slotNumber, slotToInsert)) != 0 )
+	{
+		return errCode;
+	}
+
+	//if( numPagesInOverflowFile < _handle->_overBucketDataFileHandler.getNumberOfPages() )
+	//{
+	//	newPageIsCreated = true;
+	//}
+	//else
+	//{
+	//	newPageIsCreated = false;
+	//}
 
 	//success
 	return errCode;
 }
 
 //PFM EXTENSION CLASS METHODS -- END
-
+/*
 //functions for the SortedEntries class
 MetaDataSortedEntries::MetaDataSortedEntries(
 		IXFileHandle& ixfilehandle, BUCKET_NUMBER bucket_number, const Attribute& attr, const void* key, const void* entry)
@@ -1042,7 +1668,7 @@ MetaDataSortedEntries::MetaDataSortedEntries(
 }
 
 //_curPageNum should be physical page number not virtual inside this function
-/*RC MetaDataSortedEntries::erasePageFromHeader(FileHandle& fileHandle)
+RC MetaDataSortedEntries::erasePageFromHeader(FileHandle& fileHandle)
 {
 	//find header page that contains the record about the data page to be removed
 	PageNum headerPageId = 0;
@@ -1217,7 +1843,7 @@ MetaDataSortedEntries::MetaDataSortedEntries(
 	//insert an entry
 	_ixfilehandle._info->_overflowPageIds[_bktNumber].insert( std::pair<int, unsigned int>(newOrderValue, dataPageId) );
 }*/
-
+/*
 RC MetaDataSortedEntries::getPage()
 {
 	RC errCode = 0;
@@ -1440,12 +2066,12 @@ bool MetaDataSortedEntries::searchEntryInArrayOfPages(RID& position, const int s
 		}
 	}
 
-    /*
-	 * data page has a following format:
-	 * [list of records without any spaces in between][free space for records][list of directory slots][(number of slots):unsigned int][(offset from page start to the start of free space):unsigned int]
-	 * ^                                                                      ^                       ^                                                                                                 ^
-	 * start of page                                                          start of dirSlot        end of dirSlot                                                                          end of page
-	 */
+    //
+	// data page has a following format:
+	// [list of records without any spaces in between][free space for records][list of directory slots][(number of slots):unsigned int][(offset from page start to the start of free space):unsigned int]
+	// ^                                                                      ^                       ^                                                                                                 ^
+	// start of page                                                          start of dirSlot        end of dirSlot                                                                          end of page
+	//
 
 	//get number of items stored in a page
 	//first integer in a (overflow or primary) page represents number of items
@@ -2116,17 +2742,17 @@ RC MetaDataSortedEntries::deleteEntry(const RID& rid)
 		//again, item to be deleted is not found
 		return -43;
 	}
-	//                 +-----------------------------+
-	//                 |                             |
-	//                 |                       ______|______
-	//                 |          carry in to "previous page"
-	//                 v                       |
-	//*----------------------------------*     |
-	//|                                   \    v
-	//[{}()()()...(X)(a)(b)(c)(d)(e)(f)(g)][{}(h)(i)...(z)()()()]	shifting_item = (h)
-	//             ^
-	//             |
-	//      item be deleted
+	//                  +-----------------------------+
+	//                  |                             |
+	//                  |                       ______|______
+	//                  |          carry in to "previous page"
+	//                  v                       |
+	// *----------------------------------*     |
+	// |                                   \    v
+	// [{}()()()...(X)(a)(b)(c)(d)(e)(f)(g)][{}(h)(i)...(z)()()()]	shifting_item = (h)
+	//              ^
+	//              |
+	//       item be deleted
 	//[{}()()()...(a)(b)(c)(d)(e)(f)(g)(h)][{}(i)....(z)()()()()]
 	//
 	//OR
@@ -2140,10 +2766,10 @@ RC MetaDataSortedEntries::deleteEntry(const RID& rid)
 	//shift all items that exist afterwards by one element
 	//	it is easier to perform shift if it is started from the end
 	BucketDataEntry shiftingEntry = (BucketDataEntry){0, (RID){0, 0}};
-	/*{
-		((BucketDataEntry*)_entryData)->_key,
-		(RID){ ((BucketDataEntry*)_entryData)->_rid.pageNum, ((BucketDataEntry*)_entryData)->_rid.slotNum }
-	};*/
+	//{
+	//	((BucketDataEntry*)_entryData)->_key,
+	//	(RID){ ((BucketDataEntry*)_entryData)->_rid.pageNum, ((BucketDataEntry*)_entryData)->_rid.slotNum }
+	//};
 
 	//the last page may happen to be full by itself, and shifting a new entry into it will result into insertion of new page
 	bool removePage = false;
@@ -2641,4 +3267,4 @@ void MetaDataSortedEntries::insertEntry()
 			exit(errCode);
 		}
 	}
-}
+}*/

@@ -8,7 +8,7 @@
 #include "ixtest_util.h"
 
 IndexManager *indexManager;
-
+/*
 void test(IXFileHandle fileHandle)
 {
 	unsigned int i = 0;
@@ -20,13 +20,13 @@ void test(IXFileHandle fileHandle)
 		mdse.insertEntry();
 
 		//print file
-		/*if( i % 339 == 0 || i % 340 == 0 || i % 680 == 0 )
-		{
-			std::cout << endl << "primary data file:" << endl;
-			printFile(fileHandle._primBucketDataFileHandler);
-			std::cout << endl << "overflow data file:" << endl;
-			printFile(fileHandle._overBucketDataFileHandler);
-		}*/
+		//if( i % 339 == 0 || i % 340 == 0 || i % 680 == 0 )
+		//{
+		//	std::cout << endl << "primary data file:" << endl;
+		//	printFile(fileHandle._primBucketDataFileHandler);
+		//	std::cout << endl << "overflow data file:" << endl;
+		//	printFile(fileHandle._overBucketDataFileHandler);
+		//}
 	}
 	i = 0;
 	for( ; i < 1023; i+=10 )
@@ -54,14 +54,6 @@ void test2(IXFileHandle fileHandle, unsigned int N)
 		MetaDataSortedEntries mdse(fileHandle, 0, (unsigned int)key, (void*)&me);
 		mdse.insertEntry();
 
-		//print file
-		/*if( i % 339 == 0 || i % 340 == 0 || i % 680 == 0 )
-		{
-			std::cout << endl << "primary data file:" << endl;
-			printFile(fileHandle._primBucketDataFileHandler);
-			std::cout << endl << "overflow data file:" << endl;
-			printFile(fileHandle._overBucketDataFileHandler);
-		}*/
 	}
 	i = 0;
 	//insert entries in a bucket 1
@@ -156,6 +148,131 @@ void test3(IXFileHandle fileHandle, unsigned int N)
 	std::cout << endl << "overflow data file:" << endl;
 	printFile(fileHandle._overBucketDataFileHandler);
 }
+*/
+
+void testPFME(IXFileHandle fileHandle)
+{
+	RecordBasedFileManager* rbfm = RecordBasedFileManager::instance();
+
+	vector<Attribute> vAttr;
+	vAttr.push_back( (Attribute){"key", TypeVarChar, 10} );
+	vAttr.push_back( (Attribute){"rid_page", TypeInt, 4} );
+	vAttr.push_back( (Attribute){"rid_slot", TypeInt, 4} );
+	void* data = malloc(100);//25);
+	memset(data, 0, 100);//25);
+	((unsigned int*)data)[0] = 3;
+	((char*)data)[4] = 'a';
+	((char*)data)[5] = 'b';
+	((char*)data)[6] = 'c';
+	((unsigned int*)( (char*)data + 7 ))[0] = 255;
+	((unsigned int*)( (char*)data + 7 ))[1] = 255;
+	RID rid = (RID){0, 0};
+
+	RC errCode = 0;
+	vector<RID> rids;
+
+	for( int i = 0; i < 355; i++ )
+	{
+		unsigned int szOfCharArray = i % 10 + 1;
+		((unsigned int*)data)[0] = szOfCharArray;
+		for( int k = 0; k < (int)szOfCharArray; k++ )
+		{
+			((char*)data)[4 + k] = 'a' + k;
+		}
+		//change
+		((unsigned int*)( (char*)data + 4 + szOfCharArray ))[0] = i % 256;
+		((unsigned int*)( (char*)data + 4 + szOfCharArray ))[1] = i;
+
+		//insert
+		if( (errCode = rbfm->insertRecord(fileHandle._overBucketDataFileHandler, vAttr, data, rid)) != 0 )
+		{
+			cout << "error code: " << errCode;
+			exit(errCode);
+		}
+		rids.push_back(rid);
+	}
+
+	cout << "overflow bucket: " << endl;
+	printFile(fileHandle._overBucketDataFileHandler);
+
+	BUCKET_NUMBER bktNumber = 0;
+	PFMExtension pfme = PFMExtension(fileHandle, bktNumber);
+
+	//setup overflow map in IX fileHandler
+	fileHandle._info->_overflowPageIds.insert( std::pair<BUCKET_NUMBER, map<int, PageNum> >(bktNumber, std::map<int, PageNum>() ) );
+	fileHandle._info->_overflowPageIds[bktNumber].insert( std::pair<int, PageNum>(0, 1) );
+	fileHandle._info->_overflowPageIds[bktNumber].insert( std::pair<int, PageNum>(1, 2) );
+	fileHandle._info->_overflowPageIds[bktNumber].insert( std::pair<int, PageNum>(2, 3) );
+	fileHandle._info->_overflowPageIds[bktNumber].insert( std::pair<int, PageNum>(3, 4) );
+
+	cout << fileHandle._info->_overflowPageIds[bktNumber].size() << endl;
+
+	int j = 0;
+
+	for( ; j < 355; j++ )
+	{
+		memset(data, 0, 100);//25);
+		/*if( (errCode = pfme.getTuple(data, bktNumber, rids[j].pageNum, rids[j].slotNum )) != 0 )
+		{
+			cout << "error code: " << errCode << endl;
+			exit(errCode);
+		}*/
+		rid.pageNum = rids[j].pageNum;
+		rid.slotNum = rids[j].slotNum;
+		if( (errCode = rbfm->readRecord(fileHandle._overBucketDataFileHandler, vAttr, rid, data)) != 0 )
+		{
+			cout << "error code: " << errCode << endl;
+			exit(errCode);
+		}
+		if( (errCode = rbfm->printRecord(vAttr, data)) != 0 )
+		{
+			cout << "error code: " << errCode << endl;
+			exit(errCode);
+		}
+	}
+
+	for( j = 178; j < 350; j++ )
+	{
+		if( j == 221 || j == 324 )
+		{
+			cout << "j = " << j;
+		}
+
+		if( (errCode = pfme.shiftRecordsToStart(0, 2, 1)) != 0 )
+		{
+			cout << "error code: " << errCode;
+			exit(errCode);
+		}
+
+		cout << "||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||" << endl;
+		cout << "||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||" << endl;
+		cout << "||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||" << endl;
+		printFile(fileHandle._overBucketDataFileHandler);
+	}
+
+	for( j = 0; j < 183; j++ )
+	{
+		memset(data, 0, 100);//25);
+		/*if( (errCode = pfme.getTuple(data, bktNumber, rids[j].pageNum, rids[j].slotNum )) != 0 )
+		{
+			cout << "error code: " << errCode << endl;
+			exit(errCode);
+		}*/
+		rid.pageNum = rids[j].pageNum;
+		rid.slotNum = rids[j].slotNum;
+		if( (errCode = rbfm->readRecord(fileHandle._overBucketDataFileHandler, vAttr, rid, data)) != 0 )
+		{
+			cout << "error code: " << errCode << endl;
+			exit(errCode);
+		}
+		if( (errCode = rbfm->printRecord(vAttr, data)) != 0 )
+		{
+			cout << "error code: " << errCode << endl;
+			exit(errCode);
+		}
+	}
+
+}
 
 int testCase_1(const string &indexFileName)
 {
@@ -198,7 +315,9 @@ int testCase_1(const string &indexFileName)
         return fail;
     }
 
-    test3(ixfileHandle, numberOfPages);
+    testPFME(ixfileHandle);
+
+    //test3(ixfileHandle, numberOfPages);
 
     //test2(ixfileHandle, numberOfPages);
 

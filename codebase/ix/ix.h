@@ -169,18 +169,31 @@ struct BucketDataEntry
 
 class PFMExtension
 {
-	PFMExtension(IXFileHandle handle, const BUCKET_NUMBER bkt_number);
+public:
+	PFMExtension(IXFileHandle& handle, const BUCKET_NUMBER bkt_number);
 	RC translateVirtualToPhysical(PageNum& physicalPageNum, const BUCKET_NUMBER bktNumber, const PageNum virtalPageNum);
 	RC getPage(const BUCKET_NUMBER bkt_number, const PageNum pageNumber);
 	RC getTuple(void* tuple, const BUCKET_NUMBER bkt_number, const PageNum pageNumber, const int slotNumber);
 	RC shiftRecordsToStart(
-			const BUCKET_NUMBER bkt_number, const PageNum startingInPageNumber, const int startingFromSlotNumber, unsigned int szInBytes);
+			const BUCKET_NUMBER bkt_number, const PageNum startingInPageNumber, const int startingFromSlotNumber);
 	RC shiftRecordsToEnd(
-			const BUCKET_NUMBER bkt_number, const PageNum startingInPageNumber, const int startingFromSlotNumber, unsigned int szInBytes);
+			const BUCKET_NUMBER bkt_number, const PageNum startingInPageNumber,
+			const int startingFromSlotNumber, unsigned int szInBytes);
 	RC deleteTuple(const BUCKET_NUMBER bkt_number, const PageNum pageNumber, const int slotNumber);
-	RC insertTuple(const BUCKET_NUMBER bkt_number, const PageNum pageNumber, const int slotNumber);
+			//i can also add new parameter => bool lastPageIsEmpty => so that higher level class can perform merge
+	RC insertTuple(
+			const void* tupleData, const unsigned int tupleLength, const BUCKET_NUMBER bkt_number,
+			const PageNum pageNumber, const int slotNumber);
+			//i can also add new parameter => bool newPageIsCreated => so that higher level class can perform split
+protected:
+	RC removePage(const BUCKET_NUMBER bkt_number, const PageNum pageNumber);
+	RC addPage(const void* dataPage, const BUCKET_NUMBER bkt_number);
+	//RC updatePageSizeInHeader(FileHandle& fileHandle, const PageNum pageNumber, const unsigned int freeSpace);
+	RC shiftRecursivelyToEnd(
+			const BUCKET_NUMBER bkt_number, const PageNum currentPageNumber, const unsigned int startingFromSlotNumber,
+			map<void*, unsigned int> slotsToShiftFromPriorPage);
 private:
-	IXFileHandle _handle;
+	IXFileHandle* _handle;
 	void* _buffer;
 	PageNum _curVirtualPage;
 };
@@ -199,7 +212,7 @@ protected:
 	RC getPage();
 	RC translateToPageNumber(const PageNum& pagenumber, PageNum& result);
 	//PageDirSlot* getRecordSlotFromCurrentPage(unsigned int slotNumber);
-	RC getTuple(const PageNum pageNumber, const unsigned int slotNumber, void* entry)
+	RC getTuple(const PageNum pageNumber, const unsigned int slotNumber, void* entry);
 	//void addPage();
 	//RC removePageRecord();
 	//RC erasePageFromHeader(FileHandle& fileHandle);
