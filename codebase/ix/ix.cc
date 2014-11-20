@@ -915,7 +915,11 @@ RC PFMExtension::getTuple(void* tuple, BUCKET_NUMBER bkt_number, const unsigned 
 	//if necessary read in the page
 	if( pageNumber != _curVirtualPage )
 	{
-		_curVirtualPage = pageNumber;
+		//write the current page to some (primary or overflow depending on the current virtual page number) file
+		if( (errCode = writePage(bkt_number, _curVirtualPage)) != 0 )
+		{
+			return errCode;
+		}
 
 		//read data page
 		if( (errCode = getPage(bkt_number, pageNumber)) != 0 )
@@ -924,6 +928,8 @@ RC PFMExtension::getTuple(void* tuple, BUCKET_NUMBER bkt_number, const unsigned 
 			//read failed
 			return errCode;
 		}
+
+		_curVirtualPage = pageNumber;
 	}
 
 	/*
@@ -1057,7 +1063,7 @@ RC PFMExtension::shiftRecordsToStart //TESTED, seems to work
 		memmove(destination, startOfShiftingBlock, szToShift);
 
 	//erase the record
-	memset( (char*)_buffer + offsetToFreeSpace, 0, ptrEndOfDirSlot->_szRecord );
+	memset( (char*)_buffer + offsetToFreeSpace, 0, deletedSlot->_szRecord );//ptrEndOfDirSlot->_szRecord );
 
 	bool needToSavePage = true;
 
@@ -1070,6 +1076,7 @@ RC PFMExtension::shiftRecordsToStart //TESTED, seems to work
 	//   |                                 |
 	// ptrEndOfDirSlot          startOfDirSlot
 	unsigned int numOfSlotsToShift = (*numSlots - 1 - startingFromSlotNumber) * sizeof(PageDirSlot);
+	unsigned int deleted_slot_size = deletedSlot->_szRecord;
 	if( numOfSlotsToShift > 0 )
 	{
 		memmove( ptrEndOfDirSlot + 1, ptrEndOfDirSlot, numOfSlotsToShift );
@@ -1098,7 +1105,7 @@ RC PFMExtension::shiftRecordsToStart //TESTED, seems to work
 		//			PAGE_SIZE - offset_to_free_space - num_slots * size_of_slot - 2 * size_of_integer
 
 		unsigned int freeSpace =
-				(PAGE_SIZE - *ptrVarForFreeSpace - *numSlots * sizeof(PageDirSlot) - 2 * sizeof(unsigned int)) + deletedSlot->_szRecord;
+				(PAGE_SIZE - *ptrVarForFreeSpace - *numSlots * sizeof(PageDirSlot) - 2 * sizeof(unsigned int)) + deleted_slot_size;
 
 		//allocate a separate buffer for holding the current page contents
 		void* dataBuffer = malloc(PAGE_SIZE);
@@ -1293,18 +1300,15 @@ RC PFMExtension::shiftRecursivelyToEnd //NOT TESTED
 	//if necessary read in the page
 	if( currentPageNumber != _curVirtualPage )
 	{
-		//write the current page to some (primary or overflow depending on the current virtual page number) file
-		if( (errCode = writePage(bkt_number, _curVirtualPage)) != 0 )
-		{
-			return errCode;
-		}
-
 		//read data page
 		if( (errCode = getPage(bkt_number, currentPageNumber)) != 0 )
 		{
 			//read failed
 			return errCode;
 		}
+
+		//update
+		_curVirtualPage = currentPageNumber;
 	}
 
 	FileHandle handle = ( _curVirtualPage == 0 ? _handle->_primBucketDataFileHandler : _handle->_overBucketDataFileHandler );
@@ -1510,11 +1514,13 @@ RC PFMExtension::shiftRecursivelyToEnd //NOT TESTED
 	//update number of slots in a page
 	*numSlots += numExtraSlots;
 
+	bool needToSave = true;
+
 	//5, if there are items to shift to the next page
 	if( shiftRecordsToNextPage.size() > 0 )
 	{
 		//	5.1 AND if the next page does not exist, then add a new page
-		if( currentPageNumber + 1 >= _handle->_info->_overflowPageIds[bkt_number].size() )
+		if( currentPageNumber + 1 > _handle->_info->_overflowPageIds[bkt_number].size() )
 		{
 			//allocate new page data buffer
 			void* newPageDataBuffer = malloc(PAGE_SIZE);
@@ -1536,6 +1542,14 @@ RC PFMExtension::shiftRecursivelyToEnd //NOT TESTED
 			//deallocate data page buffer
 			free(newPageDataBuffer);
 		}
+
+		//write the current page to some (primary or overflow depending on the current virtual page number) file
+		if( (errCode = writePage(bkt_number, _curVirtualPage)) != 0 )
+		{
+			return errCode;
+		}
+		needToSave = false;
+
 		//	5.2 call this function (recursively) on the next page with the map data-structure composed in step 1
 		if( (errCode = shiftRecursivelyToEnd(
 				bkt_number, currentPageNumber + 1, 0, shiftRecordsToNextPage)) != 0 )
@@ -1557,6 +1571,15 @@ RC PFMExtension::shiftRecursivelyToEnd //NOT TESTED
 	for( ; shiftInIter != shiftInMax; shiftInIter++ )
 	{
 		free( shiftInIter->first );
+	}
+
+	if( needToSave )
+	{
+		//write the current page to some (primary or overflow depending on the current virtual page number) file
+		if( (errCode = writePage(bkt_number, _curVirtualPage)) != 0 )
+		{
+			return errCode;
+		}
 	}
 
 	//success

@@ -168,12 +168,11 @@ void testPFME(IXFileHandle fileHandle)
 	((char*)data)[6] = 'c';
 	((unsigned int*)( (char*)data + 7 ))[0] = 255;
 	((unsigned int*)( (char*)data + 7 ))[1] = 255;
-	RID rid = (RID){0, 0};
 
 	RC errCode = 0;
-	vector<RID> rids;
+	//vector<RID> rids;
 
-	for( int i = 0; i < 120; i++ )
+	for( int i = 0; i < 320; i++ )
 	{
 		unsigned int szOfCharArray = i % 10 + 10;
 		((unsigned int*)data)[0] = szOfCharArray;
@@ -202,17 +201,17 @@ void testPFME(IXFileHandle fileHandle)
 		// 90 -> 99 => page 2 (slots 0 -> 9 => need to shift)
 		// 100 -> 109 => page 3 (slots 0 -> 9 => need to shift)
 		// 110 -> 119 => page 4 (slots 0 -> 9 => need to shift)
-		rid = (RID){/*(i / 10)*/0 % 4, i % 10};
+		//rid = (RID){/*(i / 10)*/0 % 4, i % 10};
 		if( i % 10 == 0 && i > 0 )
 		{
 			cout << "i = " << i;
 		}
-		if( (errCode = pfme.insertTuple(data, length, bktNumber, rid.pageNum, rid.slotNum)) )
+		if( (errCode = pfme.insertTuple(data, length, bktNumber, 0, ( i < 1 ? i : 1 ) )) != 0 )//rid.pageNum, rid.slotNum)) )
 		{
 			cout << "error code: " << errCode;
 			exit(errCode);
 		}
-		rids.push_back(rid);
+		//rids.push_back(rid);
 	}
 
 	cout << "overflow bucket: " << endl;
@@ -231,14 +230,34 @@ void testPFME(IXFileHandle fileHandle)
 
 	int j = 0;
 
-	for( ; j < 120; j++ )
+	unsigned int pageNum = 0, slotNum = 0;
+
+	for( ; j < 320; j++ )
 	{
 		memset(data, 0, 100);//25);
-		if( (errCode = pfme.getTuple(data, bktNumber, rids[j].pageNum, rids[j].slotNum )) != 0 )
+
+		int failures = 0;
+		while(failures < 2)
 		{
-			cout << "error code: " << errCode << endl;
-			exit(errCode);
+			if( (errCode = pfme.getTuple(data, bktNumber, pageNum, slotNum )) != 0 )
+			{
+				cout << endl << "next page" << endl;
+				pageNum++;
+				slotNum = 0;
+				failures++;
+				//cout << "error code: " << errCode << endl;
+				//exit(errCode);
+				continue;
+			}
+			else
+			{
+				failures = 0;
+				slotNum++;
+				break;
+			}
 		}
+		if( failures == 2 )
+			break;
 		//rid.pageNum = rids[j].pageNum;
 		//rid.slotNum = rids[j].slotNum;
 		//if( (errCode = rbfm->readRecord(fileHandle._overBucketDataFileHandler, vAttr, rid, data)) != 0 )
@@ -253,13 +272,27 @@ void testPFME(IXFileHandle fileHandle)
 		}
 	}
 
-	for( j = 5; j < 120 - 5; j++ )
+	cout << endl << endl << "AFTER THE READS" << endl << endl;
+	cout << "overflow bucket: " << endl;
+	printFile(fileHandle._overBucketDataFileHandler);
+	cout << "primary bucket: " << endl;
+	printFile(fileHandle._primBucketDataFileHandler);
+
+	for( j = 0; j < 320-30; j++ )	//15
 	{
-		if( (errCode = pfme.deleteTuple(bktNumber, 1, 5)) != 0 )
+		if( j == 184 || j == 185 )
+		{
+			cout << "j = " << j << endl;
+		}
+
+		if( (errCode = pfme.deleteTuple(bktNumber, 0, 5)) != 0 )
 		{
 			cout << "error code: " << errCode;
 			exit(errCode);
 		}
+
+		cout << "primary bucket: " << endl;
+		printFile(fileHandle._primBucketDataFileHandler);
 
 		//if( (errCode = pfme.shiftRecordsToStart(0, 2, 1)) != 0 )
 		//{
@@ -267,20 +300,44 @@ void testPFME(IXFileHandle fileHandle)
 		//	exit(errCode);
 		//}
 
-		cout << "||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||" << endl;
-		cout << "||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||" << endl;
-		cout << "||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||" << endl;
-		printFile(fileHandle._overBucketDataFileHandler);
+		//cout << "||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||" << endl;
+		//cout << "||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||" << endl;
+		//cout << "||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||" << endl;
+		//printFile(fileHandle._overBucketDataFileHandler);
 	}
 
-	for( j = 0; j < 10; j++ )
+	cout << "overflow bucket: " << endl;
+	printFile(fileHandle._overBucketDataFileHandler);
+	cout << "primary bucket: " << endl;
+	printFile(fileHandle._primBucketDataFileHandler);
+
+	pageNum = 0;
+	slotNum = 0;
+
+	for( j = 0; j < 30; j++ )	//320 - 15
 	{
 		memset(data, 0, 100);//25);
-		if( (errCode = pfme.getTuple(data, bktNumber, rids[j].pageNum, rids[j].slotNum )) != 0 )
+		int failures = 0;
+		while(failures < 2)
 		{
-			cout << "error code: " << errCode << endl;
-			exit(errCode);
+			if( (errCode = pfme.getTuple(data, bktNumber, pageNum, slotNum )) != 0 )
+			{
+				cout << endl << "next page" << endl;
+				pageNum++;
+				slotNum = 0;
+				failures++;
+				//cout << "error code: " << errCode << endl;
+				//exit(errCode);
+				break;
+			}
+			else
+			{
+				failures = 0;
+				slotNum++;
+			}
 		}
+		if( failures == 2 )
+			break;
 		//rid.pageNum = rids[j].pageNum;
 		//rid.slotNum = rids[j].slotNum;
 		//if( (errCode = rbfm->readRecord(fileHandle._overBucketDataFileHandler, vAttr, rid, data)) != 0 )
