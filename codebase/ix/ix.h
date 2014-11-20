@@ -163,9 +163,9 @@ struct BucketDataEntry
 	RID _rid;
 };
 
-//#define SZ_OF_BUCKET_ENTRY sizeof(BucketDataEntry)
+#define SZ_OF_BUCKET_ENTRY sizeof(BucketDataEntry)
 
-//#define MAX_BUCKET_ENTRIES_IN_PAGE ( (PAGE_SIZE - sizeof(unsigned int) * 2) / SZ_OF_BUCKET_ENTRY )
+#define MAX_BUCKET_ENTRIES_IN_PAGE ( (PAGE_SIZE - sizeof(unsigned int) * 2) / SZ_OF_BUCKET_ENTRY )
 
 class PFMExtension
 {
@@ -183,7 +183,7 @@ public:
 			//i can also add new parameter => bool lastPageIsEmpty => so that higher level class can perform merge
 	RC insertTuple(
 			void* tupleData, const unsigned int tupleLength, const BUCKET_NUMBER bkt_number,
-			const PageNum pageNumber, const int slotNumber);
+			const PageNum pageNumber, const int slotNumber, bool &newPageIsCreated);
 			//i can also add new parameter => bool newPageIsCreated => so that higher level class can perform split
 protected:
 	RC writePage(const BUCKET_NUMBER bkt_number, const PageNum pageNumber);
@@ -202,7 +202,7 @@ private:
 class MetaDataSortedEntries
 {
 public:
-	MetaDataSortedEntries(IXFileHandle& ixfilehandle, BUCKET_NUMBER bucket_number, const Attribute& attr, const void* key, const void* entry);
+	MetaDataSortedEntries(IXFileHandle& ixfilehandle, BUCKET_NUMBER bucket_number, const Attribute& attr, void* key, const void* entry, unsigned int entryLength);
 	~MetaDataSortedEntries();
 	void insertEntry();
 	RC searchEntry(RID& position, void* entry);
@@ -214,20 +214,23 @@ protected:
 	RC translateToPageNumber(const PageNum& pagenumber, PageNum& result);
 	//PageDirSlot* getRecordSlotFromCurrentPage(unsigned int slotNumber);
 	RC getTuple(const PageNum pageNumber, const unsigned int slotNumber, void* entry);
-	//void addPage();
-	//RC removePageRecord();
+	void addPage();
+	RC removePageRecord();
 	//RC erasePageFromHeader(FileHandle& fileHandle);
 	unsigned int numOfPages();
 	RC splitBucket();
 	RC mergeBuckets();
+	RC mergeBuckets(BUCKET_NUMBER lowBucket);
 private:
 	IXFileHandle _ixfilehandle;
 	void* _key;
 	Attribute _attr;
 	const void* _entryData;
+	unsigned int _entryLength;
 	int _curPageNum;
 	void* _curPageData;
 	BUCKET_NUMBER _bktNumber;
+	PFMExtension pfme;
 };
 
 #endif
