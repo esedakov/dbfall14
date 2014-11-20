@@ -182,10 +182,11 @@ public:
 	RC deleteTuple(const BUCKET_NUMBER bkt_number, const PageNum pageNumber, const int slotNumber);
 			//i can also add new parameter => bool lastPageIsEmpty => so that higher level class can perform merge
 	RC insertTuple(
-			const void* tupleData, const unsigned int tupleLength, const BUCKET_NUMBER bkt_number,
+			void* tupleData, const unsigned int tupleLength, const BUCKET_NUMBER bkt_number,
 			const PageNum pageNumber, const int slotNumber);
 			//i can also add new parameter => bool newPageIsCreated => so that higher level class can perform split
 protected:
+	RC writePage(const BUCKET_NUMBER bkt_number, const PageNum pageNumber);
 	RC removePage(const BUCKET_NUMBER bkt_number, const PageNum pageNumber);
 	RC addPage(const void* dataPage, const BUCKET_NUMBER bkt_number);
 	//RC updatePageSizeInHeader(FileHandle& fileHandle, const PageNum pageNumber, const unsigned int freeSpace);

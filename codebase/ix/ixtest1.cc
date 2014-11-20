@@ -153,6 +153,8 @@ void test3(IXFileHandle fileHandle, unsigned int N)
 void testPFME(IXFileHandle fileHandle)
 {
 	RecordBasedFileManager* rbfm = RecordBasedFileManager::instance();
+	BUCKET_NUMBER bktNumber = 0;
+	PFMExtension pfme = PFMExtension(fileHandle, bktNumber);
 
 	vector<Attribute> vAttr;
 	vAttr.push_back( (Attribute){"key", TypeVarChar, 10} );
@@ -171,9 +173,9 @@ void testPFME(IXFileHandle fileHandle)
 	RC errCode = 0;
 	vector<RID> rids;
 
-	for( int i = 0; i < 355; i++ )
+	for( int i = 0; i < 120; i++ )
 	{
-		unsigned int szOfCharArray = i % 10 + 1;
+		unsigned int szOfCharArray = i % 10 + 10;
 		((unsigned int*)data)[0] = szOfCharArray;
 		for( int k = 0; k < (int)szOfCharArray; k++ )
 		{
@@ -183,8 +185,29 @@ void testPFME(IXFileHandle fileHandle)
 		((unsigned int*)( (char*)data + 4 + szOfCharArray ))[0] = i % 256;
 		((unsigned int*)( (char*)data + 4 + szOfCharArray ))[1] = i;
 
+		unsigned int length = 4 + szOfCharArray + 4 + 4;
+
 		//insert
-		if( (errCode = rbfm->insertRecord(fileHandle._overBucketDataFileHandler, vAttr, data, rid)) != 0 )
+		//if( (errCode = rbfm->insertRecord(fileHandle._overBucketDataFileHandler, vAttr, data, rid)) != 0 )
+		//PageNumbers:
+		// 0 -> 9 => page 1 (slots 0 -> 9 all new, insert at the end)
+		// 10 -> 19 => page 2 (slots 0 -> 9 all new, insert at the end)
+		// 20 -> 29 => page 3 (slots 0 -> 9 all new, insert at the end)
+		// 30 -> 39 => page 4 (slots 0 -> 9 all new, insert at the end)
+		// 40 -> 49 => page 1 (slots 0 -> 9 => need to shift)
+		// 50 -> 59 => page 2 (slots 0 -> 9 => need to shift)
+		// 60 -> 69 => page 3 (slots 0 -> 9 => need to shift)
+		// 70 -> 79 => page 4 (slots 0 -> 9 => need to shift)
+		// 80 -> 89 => page 1 (slots 0 -> 9 => need to shift)
+		// 90 -> 99 => page 2 (slots 0 -> 9 => need to shift)
+		// 100 -> 109 => page 3 (slots 0 -> 9 => need to shift)
+		// 110 -> 119 => page 4 (slots 0 -> 9 => need to shift)
+		rid = (RID){/*(i / 10)*/0 % 4, i % 10};
+		if( i % 10 == 0 && i > 0 )
+		{
+			cout << "i = " << i;
+		}
+		if( (errCode = pfme.insertTuple(data, length, bktNumber, rid.pageNum, rid.slotNum)) )
 		{
 			cout << "error code: " << errCode;
 			exit(errCode);
@@ -194,36 +217,35 @@ void testPFME(IXFileHandle fileHandle)
 
 	cout << "overflow bucket: " << endl;
 	printFile(fileHandle._overBucketDataFileHandler);
-
-	BUCKET_NUMBER bktNumber = 0;
-	PFMExtension pfme = PFMExtension(fileHandle, bktNumber);
+	cout << "primary bucket: " << endl;
+	printFile(fileHandle._primBucketDataFileHandler);
 
 	//setup overflow map in IX fileHandler
-	fileHandle._info->_overflowPageIds.insert( std::pair<BUCKET_NUMBER, map<int, PageNum> >(bktNumber, std::map<int, PageNum>() ) );
-	fileHandle._info->_overflowPageIds[bktNumber].insert( std::pair<int, PageNum>(0, 1) );
-	fileHandle._info->_overflowPageIds[bktNumber].insert( std::pair<int, PageNum>(1, 2) );
-	fileHandle._info->_overflowPageIds[bktNumber].insert( std::pair<int, PageNum>(2, 3) );
-	fileHandle._info->_overflowPageIds[bktNumber].insert( std::pair<int, PageNum>(3, 4) );
+	//fileHandle._info->_overflowPageIds.insert( std::pair<BUCKET_NUMBER, map<int, PageNum> >(bktNumber, std::map<int, PageNum>() ) );
+	//fileHandle._info->_overflowPageIds[bktNumber].insert( std::pair<int, PageNum>(0, 1) );
+	//fileHandle._info->_overflowPageIds[bktNumber].insert( std::pair<int, PageNum>(1, 2) );
+	//fileHandle._info->_overflowPageIds[bktNumber].insert( std::pair<int, PageNum>(2, 3) );
+	//fileHandle._info->_overflowPageIds[bktNumber].insert( std::pair<int, PageNum>(3, 4) );
 
 	cout << fileHandle._info->_overflowPageIds[bktNumber].size() << endl;
 
 	int j = 0;
 
-	for( ; j < 355; j++ )
+	for( ; j < 120; j++ )
 	{
 		memset(data, 0, 100);//25);
-		/*if( (errCode = pfme.getTuple(data, bktNumber, rids[j].pageNum, rids[j].slotNum )) != 0 )
-		{
-			cout << "error code: " << errCode << endl;
-			exit(errCode);
-		}*/
-		rid.pageNum = rids[j].pageNum;
-		rid.slotNum = rids[j].slotNum;
-		if( (errCode = rbfm->readRecord(fileHandle._overBucketDataFileHandler, vAttr, rid, data)) != 0 )
+		if( (errCode = pfme.getTuple(data, bktNumber, rids[j].pageNum, rids[j].slotNum )) != 0 )
 		{
 			cout << "error code: " << errCode << endl;
 			exit(errCode);
 		}
+		//rid.pageNum = rids[j].pageNum;
+		//rid.slotNum = rids[j].slotNum;
+		//if( (errCode = rbfm->readRecord(fileHandle._overBucketDataFileHandler, vAttr, rid, data)) != 0 )
+		//{
+		//	cout << "error code: " << errCode << endl;
+		//	exit(errCode);
+		//}
 		if( (errCode = rbfm->printRecord(vAttr, data)) != 0 )
 		{
 			cout << "error code: " << errCode << endl;
@@ -231,18 +253,19 @@ void testPFME(IXFileHandle fileHandle)
 		}
 	}
 
-	for( j = 178; j < 350; j++ )
+	for( j = 5; j < 120 - 5; j++ )
 	{
-		if( j == 221 || j == 324 )
-		{
-			cout << "j = " << j;
-		}
-
-		if( (errCode = pfme.shiftRecordsToStart(0, 2, 1)) != 0 )
+		if( (errCode = pfme.deleteTuple(bktNumber, 1, 5)) != 0 )
 		{
 			cout << "error code: " << errCode;
 			exit(errCode);
 		}
+
+		//if( (errCode = pfme.shiftRecordsToStart(0, 2, 1)) != 0 )
+		//{
+		//	cout << "error code: " << errCode;
+		//	exit(errCode);
+		//}
 
 		cout << "||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||" << endl;
 		cout << "||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||" << endl;
@@ -250,21 +273,21 @@ void testPFME(IXFileHandle fileHandle)
 		printFile(fileHandle._overBucketDataFileHandler);
 	}
 
-	for( j = 0; j < 183; j++ )
+	for( j = 0; j < 10; j++ )
 	{
 		memset(data, 0, 100);//25);
-		/*if( (errCode = pfme.getTuple(data, bktNumber, rids[j].pageNum, rids[j].slotNum )) != 0 )
-		{
-			cout << "error code: " << errCode << endl;
-			exit(errCode);
-		}*/
-		rid.pageNum = rids[j].pageNum;
-		rid.slotNum = rids[j].slotNum;
-		if( (errCode = rbfm->readRecord(fileHandle._overBucketDataFileHandler, vAttr, rid, data)) != 0 )
+		if( (errCode = pfme.getTuple(data, bktNumber, rids[j].pageNum, rids[j].slotNum )) != 0 )
 		{
 			cout << "error code: " << errCode << endl;
 			exit(errCode);
 		}
+		//rid.pageNum = rids[j].pageNum;
+		//rid.slotNum = rids[j].slotNum;
+		//if( (errCode = rbfm->readRecord(fileHandle._overBucketDataFileHandler, vAttr, rid, data)) != 0 )
+		//{
+		//	cout << "error code: " << errCode << endl;
+		//	exit(errCode);
+		//}
 		if( (errCode = rbfm->printRecord(vAttr, data)) != 0 )
 		{
 			cout << "error code: " << errCode << endl;
