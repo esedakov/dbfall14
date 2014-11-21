@@ -1657,7 +1657,7 @@ RC PFMExtension::removePage(const BUCKET_NUMBER bkt_number, const PageNum pageNu
 	return errCode;
 }
 
-RC PFMExtension::deleteTuple(const BUCKET_NUMBER bkt_number, const PageNum pageNumber, const int slotNumber)//, bool lastPageIsEmpty)
+RC PFMExtension::deleteTuple(const BUCKET_NUMBER bkt_number, const PageNum pageNumber, const int slotNumber, bool lastPageIsEmpty)
 {
 	RC errCode = 0;
 
@@ -1666,14 +1666,14 @@ RC PFMExtension::deleteTuple(const BUCKET_NUMBER bkt_number, const PageNum pageN
 		return errCode;
 	}
 
-	//unsigned int lastPageNumber = _handle->_info->_overflowPageIds[bkt_number].size() - 1;
-	//
-	//if( (errCode = getPage(bkt_number, lastPageNumber)) != 0 )
-	//{
-	//	return errCode;
-	//}
-	//
-	//lastPageIsEmpty = (unsigned int*)((char*)_buffer + PAGE_SIZE - 2 * sizeof(unsigned int)) == 0;
+	unsigned int lastPageNumber = _handle->_info->_overflowPageIds[bkt_number].size() - 1;
+
+	if( (errCode = getPage(bkt_number, lastPageNumber)) != 0 )
+	{
+		return errCode;
+	}
+
+	lastPageIsEmpty = (unsigned int*)((char*)_buffer + PAGE_SIZE - 2 * sizeof(unsigned int)) == 0;
 
 	//success
 	return errCode;
@@ -1845,11 +1845,11 @@ int MetaDataSortedEntries::searchEntryInPage(RID& result, const PageNum& pageNum
 	RC errCode = 0;
 
 	//retrieve middle value
-	//if( (errCode = pfme.getTuple(midValue, _bktNumber, pageNumber, middle)) != 0 )
-	//{
-	//	free(midValue);
-	//	return errCode;
-	//}
+	if( (errCode = pfme->getTuple(midValue, _bktNumber, pageNumber, middle)) != 0 )
+	{
+		free(midValue);
+		return errCode;
+	}
 
 	if( _key == midValue )
 	{
@@ -1961,8 +1961,12 @@ void MetaDataSortedEntries::insertEntry()
 	if( position.slotNum < numOfEntriesInPage )	//of course, providing that this page has some entries
 	{
 		//keep looping while finding duplicates (i.e. entries with the same key, with the assumption of different RIDs)
-		//while( ((BucketDataEntry*)_curPageData)[position.slotNum]._key <= _key )
-		while( ((BucketDataEntry*)((char*)_curPageData + 2 * sizeof(unsigned int) + position.slotNum * SZ_OF_BUCKET_ENTRY))->_key <= _key )
+		BucketDataEntry *entry;
+		if((errCode=pfme->getTuple(entry, _bktNumber, position.pageNum, position.slotNum))!=0){
+			IX_PrintError(errCode);
+			exit(errCode);
+		}
+		while( entry->_key <= _key )
 		{
 			position.slotNum++;
 			//if we go beyond the page boundaries then, go to the next page
@@ -1990,6 +1994,11 @@ void MetaDataSortedEntries::insertEntry()
 
 				//reset number of entries in the page
 				numOfEntriesInPage = ((unsigned int*)_curPageData)[0];
+			}
+
+			if((errCode=pfme->getTuple(entry, _bktNumber, position.pageNum, position.slotNum))!=0){
+				IX_PrintError(errCode);
+				exit(errCode);
 			}
 		}
 	}
@@ -2098,6 +2107,227 @@ void MetaDataSortedEntries::addPage()
 	_ixfilehandle->_info->_overflowPageIds[_bktNumber].insert( std::pair<int, unsigned int>(newOrderValue, dataPageId) );
 }
 
+RC MetaDataSortedEntries::deleteEntry(const RID& rid)
+{
+	RC errCode = 0;
+
+	RID position = (RID){0, 0};
+
+	int maxPages = numOfPages();
+
+	//find position of this item
+	if( searchEntryInArrayOfPages(position, _curPageNum, maxPages - 1) == false )
+	{
+		return -43;	//attempting to delete index-entry that does not exist
+	}
+
+	_curPageNum = position.pageNum;
+
+	//linearly search among duplicates until a requested item is found
+	unsigned int numOfEntriesInPage = ((unsigned int*)_curPageData)[0];
+	if( position.slotNum < numOfEntriesInPage )	//of course, providing that this page has some entries
+	{
+		//in the presence of duplicates, we may arrive at any random spot within the list duplicates tuples (i.e. tuples with the same key)
+		//but in order to make sure that the item exists or does not exist, we need to scan the whole list of duplicates
+
+		//first, however, need to find the start of the duplicate list
+		while(true)
+		{
+			//check if the current item has a different key (less than the key of interest)
+			BucketDataEntry *entry;
+			if((errCode=pfme->getTuple(entry, _bktNumber, position.pageNum, position.slotNum))!=0)
+			{
+				IX_PrintError(errCode);
+				exit(errCode);
+			}
+			if( entry->_key < _key )
+			{
+				//if so, then quit => start is found
+				break;
+			}
+
+			//check if the next index is outside of the page
+			if( position.slotNum == 0 )
+			{
+				//check if this is a primary page
+				if( position.pageNum == 0 )
+				{
+					//if so, there are no pages in front of it => start is found
+					break;
+				}
+				//otherwise, go to the previous page
+				position.pageNum--;
+				_curPageNum = position.pageNum;
+
+				//reset slot number
+				//position.slotNum = MAX_BUCKET_ENTRIES_IN_PAGE - 1;
+
+				//read in the page
+				if( (errCode = getPage()) != 0 )
+				{
+					IX_PrintError(errCode);
+					exit(errCode);
+				}
+
+				continue;
+			}
+
+			//decrement index
+			position.slotNum--;
+		}
+
+		//now linearly scan thru the list of duplicates until either:
+		//	1. item is found
+		//	2. or, items with the given key are exhausted => no specified item exists => fail
+		BucketDataEntry *entry;
+		if((errCode=pfme->getTuple(entry, _bktNumber, position.pageNum, position.slotNum))!=0)
+		{
+			IX_PrintError(errCode);
+			exit(errCode);
+		}
+		while(entry->_key < _key || (entry->_key == _key &&	(entry->_rid.pageNum != rid.pageNum ||	entry->_rid.slotNum != rid.slotNum	) ) )
+		{
+			position.slotNum++;
+			//if we go beyond the page boundaries then, go to the next page
+			if( position.slotNum >= numOfEntriesInPage )
+			{
+				//check if next page exists
+				if( position.pageNum + 1 >= (unsigned int)maxPages )
+				{
+					break;
+				}
+
+				//increment to next page
+				position.pageNum++;
+				_curPageNum = position.pageNum;
+
+				//reset slot number
+				position.slotNum = 0;
+
+				//read in the page
+				if( (errCode = getPage()) != 0 )
+				{
+					IX_PrintError(errCode);
+					exit(errCode);
+				}
+
+				//reset number of entries in the page
+				numOfEntriesInPage = ((unsigned int*)_curPageData)[0];
+			}
+
+			if((errCode=pfme->getTuple(entry, _bktNumber, position.pageNum, position.slotNum))!=0)
+			{
+				IX_PrintError(errCode);
+				exit(errCode);
+			}
+		}
+
+		//check that the item is found (it should be pointed now by slotNum)
+		if( entry->_rid.pageNum != rid.pageNum || entry->_rid.slotNum != rid.slotNum )
+		{
+			//if it is not the item, then it means we have looped thru all duplicate entries and still have not found the right one with given RID
+			return -43;	//attempting to delete index-entry that does not exist
+		}
+	}
+	else
+	{
+		//again, item to be deleted is not found
+		return -43;
+	}
+
+
+	//delete entry from PFMExtension by shifting
+	bool lastPageIsEmpty;
+	if((errCode=pfme->deleteTuple(_bktNumber, position.pageNum, position.slotNum, lastPageIsEmpty))!=0)
+	{
+		IX_PrintError(errCode);
+		exit(errCode);
+	}
+
+
+	if( lastPageIsEmpty )
+	{
+		//then perform merge
+		_curPageNum = maxPages - 1;
+		if( _curPageNum > 0 )
+		{
+			//if it happens to be the overflow page, then remove record about it from the overflowPageId map and the overflow PFM header
+			if( removePageRecord() != 0 )
+			{
+				return errCode;
+			}
+		}
+
+		unsigned int savedBucketNumber = _bktNumber;
+
+		if( _ixfilehandle->_info->Next == 0 )
+		{
+			_ixfilehandle->_info->Next =
+					(unsigned int)( _ixfilehandle->_info->N * (unsigned int)pow(2.0, (int)(_ixfilehandle->_info->Level - 1)) );//- 1 );	//-1 will be taken out later
+			_ixfilehandle->_info->Level--;
+		}
+
+		//if it is a last primary bucket, then "merge it with its image"
+		if( _ixfilehandle->_info->Next > 0 )
+		{
+			_ixfilehandle->_info->Next--;
+		}
+
+		//process merge
+		_bktNumber = _ixfilehandle->_info->Next;
+		_curPageNum = 0;
+		memset(_curPageData, 0, PAGE_SIZE);
+		if( (errCode = mergeBuckets()) != 0 )
+		{
+			return errCode;
+		}
+
+		//update IX header and fileHeader info
+		if( (errCode = _ixfilehandle->_metaDataFileHandler.readPage(1, _curPageData)) != 0 )
+		{
+			//return error code
+			IX_PrintError(errCode);
+			exit(errCode);
+		}
+
+		((unsigned int*)_curPageData)[1] = _ixfilehandle->_info->Level;
+		((unsigned int*)_curPageData)[2] = _ixfilehandle->_info->Next;
+
+		if( (errCode = _ixfilehandle->_metaDataFileHandler.writePage(1, _curPageData)) != 0 )
+		{
+			//return error code
+			IX_PrintError(errCode);
+			exit(errCode);
+		}
+
+		//remove overflow pages for the image of the merged bucket
+		_bktNumber = _ixfilehandle->_info->Next + _ixfilehandle->N_Level();
+		maxPages = numOfPages();
+		_curPageNum = -1;
+		for( int i = 1; i < maxPages; i++ )
+		{
+			_curPageNum = i;
+
+			removePageRecord();
+		}
+
+		//erase higher bucket's primary page
+		_curPageNum = _bktNumber + 1;
+		if( (errCode = erasePageFromHeader(_ixfilehandle->_primBucketDataFileHandler)) != 0 )
+		{
+			//return error code
+			IX_PrintError(errCode);
+			exit(errCode);
+		}
+
+		//restore bucket number
+		_bktNumber = savedBucketNumber;
+	}
+
+	//success
+	return errCode;
+}
+
 // implement with the new aproach
 RC MetaDataSortedEntries::splitBucket()
 {
@@ -2106,267 +2336,99 @@ RC MetaDataSortedEntries::splitBucket()
 	return errCode;
 }
 
+// implement with the new aproach
 RC MetaDataSortedEntries::mergeBuckets(BUCKET_NUMBER lowBucket)
 {
+	int errCode=0;
 
-	//MetaDataSortedEntries(IXFileHandle& ixfilehandle, BUCKET_NUMBER bucket_number, const Attribute& attr, const void* key, const void* entry);
+	return errCode;
+}
+
+//_curPageNum should be physical page number not virtual inside this function
+RC MetaDataSortedEntries::erasePageFromHeader(FileHandle& fileHandle)
+{
+	//find header page that contains the record about the data page to be removed
+	PageNum headerPageId = 0;
+
 	RC errCode = 0;
 
-	//[            ]........[            ]
-	//[  bucket k  ]........[ bucket k+N ]
-	//[            ]........[            ]
-	//      |                     |
-	//      v                     v
-	//[1,7,19,22,23]		[2,3,4,5,6   ]
-	//                      [100,101,200 ]
+	//pointer to the header page
+	Header* hPage = NULL;
 
-	//perform a 1-pass merge page-by-page, since we are merging two sorted arrays
+	//allocate temporary buffer for page
+	void* data = malloc(PAGE_SIZE);
 
-	//[1,7,19,22,23] []
-	//[2,3,4,5,6]    [100,101,200]
-	//[1,2,3,4,5,6] => [7,19,22,23,100] => [101,200]
+	bool found = false;
 
-	//indexes for page
-	int low_curPage = 0, high_curPage = 0,
-		low_max = 1 + (int)_ixfilehandle->_info->_overflowPageIds[lowBucket].size(),
-		high_max = 1 + (int)_ixfilehandle->_info->_overflowPageIds[lowBucket + _ixfilehandle->N_Level()].size();
-
-	//buffers for pages
-	void* data[2];
-	data[0] = malloc(PAGE_SIZE);
-	data[1] = malloc(PAGE_SIZE);
-
-	//clear up buffers
-	memset(data[0], 0, PAGE_SIZE);
-	memset(data[1], 0, PAGE_SIZE);
-
-	//setup indexes for looping inside the pages
-	int low_entryIndex = 0, high_entryIndex = 0,
-		low_maxIndex = -1,
-		high_maxIndex = -1;
-
-	//collect output pages
-	std::vector<char*> outputPageList;
-
-	unsigned int bucketIds[2] = { lowBucket, lowBucket + _ixfilehandle->N_Level() };
-
-	//iterate over the two buckets
+	//loop thru header pages
 	do
 	{
-		//read in the pages
-		for( int i = 0; i < 2; i++ )
+		//get the first header page
+		if( (errCode = fileHandle.readPage((PageNum)headerPageId, data)) != 0 )
 		{
-			//check whether a new page is necessary
-			if( (i == 0 && low_entryIndex < low_maxIndex) ||
-				(i == 1 && high_entryIndex < high_maxIndex) )
-				continue;
+			//deallocate data
+			free(data);
 
-			//getPage uses _curPageNum to denote index of required page
-			if( i == 0 )
-			{
-				_curPageNum = low_curPage;
-				low_curPage++;
-			}
-			else
-			{
-				_curPageNum = high_curPage;
-				high_curPage++;
-			}
-
-			//assign bucket id
-			_bktNumber = bucketIds[i];
-
-			//if one bucket gets exhausted, then keep looping thru the second
-			if( low_curPage > low_max || high_curPage > high_max )
-			{
-				continue;
-			}
-
-			//load the page
-			if( (errCode = getPage()) != 0 )
-			{
-				free(data[0]);
-				free(data[1]);
-				return errCode;
-			}
-
-			//left and right pages are maintained in the respective buffers
-			memcpy( data[i], _curPageData, PAGE_SIZE );
+			//return error
+			return errCode;
 		}
 
-		//check if page counters are within the bucket boundaries
-		if( low_curPage > low_max && high_curPage > high_max )
+		//cast data to Header
+		hPage = (Header*)data;
+
+		//loop thru PageInfo tuples
+		for( unsigned int i = 0; i < NUM_OF_PAGE_IDS; i++ )
 		{
-			//if both are beyond, then quit
-			break;
-		}
-
-		//setup maximum entries inside the page
-		if( low_curPage <= low_max )
-			low_maxIndex = (int)((unsigned int*)data[0])[0];
-		else
-		{
-			low_maxIndex = MAX_BUCKET_ENTRIES_IN_PAGE + 1;
-			low_entryIndex = 0;
-		}
-		if( high_curPage <= high_max )
-			high_maxIndex = (int)((unsigned int*)data[1])[0];
-		else
-		{
-			high_maxIndex = MAX_BUCKET_ENTRIES_IN_PAGE + 1;
-			high_entryIndex = 0;
-		}
-
-		void* outputData = malloc(PAGE_SIZE);
-		memset(outputData, 0, PAGE_SIZE);
-
-		//iterate thru two pages (side-by-side) and compose the merged version
-		int i = 0;
-		int max = (low_maxIndex == 0 && high_maxIndex == 0 ? 0 : MAX_BUCKET_ENTRIES_IN_PAGE);
-		for( ; i < max; i++ )
-		{
-			BucketDataEntry *low_entry, *high_entry;
-			//setup pointers to the entries
-			if( low_entryIndex < low_maxIndex )
-				low_entry = (BucketDataEntry*)((char*)data[0] + 2 * sizeof(unsigned int) + low_entryIndex * SZ_OF_BUCKET_ENTRY);
-			else
-				low_entry = NULL;
-			if( high_entryIndex < high_maxIndex )
-				high_entry = (BucketDataEntry*)((char*)data[1] + 2 * sizeof(unsigned int) + high_entryIndex * SZ_OF_BUCKET_ENTRY);
-			else
-				high_entry = NULL;
-
-			//compare two entries and copy the smallest entry to the result set
-			if( low_curPage <= low_max && high_curPage <= high_max )
+			if( hPage->_arrOfPageIds[i]._pageid == (unsigned int)_curPageNum )
 			{
-				if( low_entry != NULL && high_entry != NULL )
-				{
-					if( low_entry->_key <= high_entry->_key )
-					{
-						memcpy
-						(
-							(BucketDataEntry*)((char*)outputData + 2 * sizeof(unsigned int) + i * (int)SZ_OF_BUCKET_ENTRY),
-							low_entry,
-							SZ_OF_BUCKET_ENTRY
-						);
-						low_entryIndex++;
-					}
-					else
-					{
-						memcpy
-						(
-							(BucketDataEntry*)((char*)outputData + 2 * sizeof(unsigned int) + i * (int)SZ_OF_BUCKET_ENTRY),
-							high_entry,
-							SZ_OF_BUCKET_ENTRY
-						);
-						high_entryIndex++;
-					}
-				}
-				else if( low_entry != NULL )
-				{
-					memcpy
-					(
-						(BucketDataEntry*)((char*)outputData + 2 * sizeof(unsigned int) + i * (int)SZ_OF_BUCKET_ENTRY),
-						low_entry,
-						SZ_OF_BUCKET_ENTRY
-					);
-					low_entryIndex++;
-				}
-				else
-				{
-					memcpy
-					(
-						(BucketDataEntry*)((char*)outputData + 2 * sizeof(unsigned int) + i * (int)SZ_OF_BUCKET_ENTRY),
-						high_entry,
-						SZ_OF_BUCKET_ENTRY
-					);
-					high_entryIndex++;
-				}
-			}
-			else if( low_curPage <= low_max )
-			{
-				//low is still needs to be transfered
-				memcpy
-				(
-					(BucketDataEntry*)((char*)outputData + 2 * sizeof(unsigned int) + i * (int)SZ_OF_BUCKET_ENTRY),
-					low_entry,
-					SZ_OF_BUCKET_ENTRY
-				);
-				low_entryIndex++;
-			}
-			else
-			{
-				//high is still needs to be transfered
-				memcpy
-				(
-					(BucketDataEntry*)((char*)outputData + 2 * sizeof(unsigned int) + i * (int)SZ_OF_BUCKET_ENTRY),
-					high_entry,
-					(unsigned int)SZ_OF_BUCKET_ENTRY
-				);
-				high_entryIndex++;
-			}
-
-			//check if low/high index is within boundaries
-			if( low_entryIndex >= low_maxIndex && high_entryIndex >= high_maxIndex )
-			{
-				i++;
+				//found the page record
+				//remove record from the PFM page header
+				hPage->_arrOfPageIds[i]._numFreeBytes = (unsigned int)-1;
+				found = true;
+				//decrease number of pages in the file
+				//_ixfilehandle._overBucketDataFileHandler._info->_numPages--;	//statement deleted, caused to error at allocation of new page,
+																				//since it was considering wrong number of pages inside the file
 				break;
 			}
 		}
 
-		//write number of entries
-		((unsigned int*)outputData)[0] = i;
-		//collect output page
-		outputPageList.push_back((char*)outputData);
+		if( found )
+			break;
 
-	} while( low_curPage <= low_max && high_curPage <= high_max );
+		//go to next header page
+		headerPageId = hPage->_nextHeaderPageId;
 
-	_curPageNum = 0;
-	_bktNumber = bucketIds[0];
+	} while(headerPageId > 0);
 
-	//write list of output pages to the appropriate bucket AND free the list of pages
-	for( int k = 0; k < (int)outputPageList.size(); k++ )
+	if( found == false )
 	{
-		//check that the page exists
-		if( _curPageNum >= low_max )
-		{
-			addPage();
-			low_max++;
-		}
-
-		void* ptr = (void*)outputPageList[k];
-
-		//write page to the bucket
-		if( _curPageNum == 0 )
-		{
-			//write page to "primary file"
-			if( (errCode = _ixfilehandle->_primBucketDataFileHandler.writePage(_bktNumber + 1, ptr)) != 0 )
-			{
-				IX_PrintError(errCode);
-				exit(errCode);
-			}
-		}
-		else
-		{
-			//write page to "overflow file"
-
-			//determine physical page number
-			PageNum actualPageNumber = _ixfilehandle->_info->_overflowPageIds[_bktNumber][_curPageNum - 1];
-
-			if( (errCode = _ixfilehandle->_overBucketDataFileHandler.writePage(actualPageNumber, ptr)) != 0 )
-			{
-				IX_PrintError(errCode);
-				exit(errCode);
-			}
-		}
-
-		//free page
-		free(ptr);
-		_curPageNum++;
+		//have not found the appropriate page
+		return -45;
 	}
 
-	free(data[0]);
-	free(data[1]);
+	//write back the header page
+	if( (errCode = fileHandle.writePage((PageNum)headerPageId, data)) != 0 )
+	{
+		//deallocate data
+		free(data);
+
+		//return error
+		return errCode;
+	}
+
+	//now, go ahead and null the contents of the erased page
+	memset(data, 0, PAGE_SIZE);
+	if( (errCode = fileHandle.writePage((PageNum)_curPageNum, data)) != 0 )
+	{
+		//deallocate data
+		free(data);
+
+		//return error
+		return errCode;
+	}
+
+	//deallocate temporary buffer for header page
+	free(data);
 
 	//success
 	return errCode;

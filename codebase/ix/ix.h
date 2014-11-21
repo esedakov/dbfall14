@@ -154,8 +154,8 @@ struct MetaDataEntry
 	PageNum _overflow_page_number;
 	unsigned int _order;
 };
-#define SZ_OF_META_ENTRY sizeof(MetaDataEntry)
-#define MAX_META_ENTRIES_IN_PAGE ( (PAGE_SIZE - sizeof(unsigned int)) / SZ_OF_META_ENTRY )
+//#define SZ_OF_META_ENTRY sizeof(MetaDataEntry)
+//#define MAX_META_ENTRIES_IN_PAGE ( (PAGE_SIZE - sizeof(unsigned int)) / SZ_OF_META_ENTRY )
 
 struct BucketDataEntry
 {
@@ -163,7 +163,7 @@ struct BucketDataEntry
 	RID _rid;
 };
 
-#define SZ_OF_BUCKET_ENTRY sizeof(BucketDataEntry)
+#define SZ_OF_BUCKET_ENTRY sizeof(BucketDataEntry)  // variable size??
 
 #define MAX_BUCKET_ENTRIES_IN_PAGE ( (PAGE_SIZE - sizeof(unsigned int) * 2) / SZ_OF_BUCKET_ENTRY )
 
@@ -179,7 +179,7 @@ public:
 	RC shiftRecordsToEnd(
 			const BUCKET_NUMBER bkt_number, const PageNum startingInPageNumber,
 			const int startingFromSlotNumber, unsigned int szInBytes);
-	RC deleteTuple(const BUCKET_NUMBER bkt_number, const PageNum pageNumber, const int slotNumber);
+	RC deleteTuple(const BUCKET_NUMBER bkt_number, const PageNum pageNumber, const int slotNumber, bool lastPageIsEmpty);
 			//i can also add new parameter => bool lastPageIsEmpty => so that higher level class can perform merge
 	RC insertTuple(
 			void* tupleData, const unsigned int tupleLength, const BUCKET_NUMBER bkt_number,
@@ -216,7 +216,7 @@ protected:
 	RC getTuple(const PageNum pageNumber, const unsigned int slotNumber, void* entry);
 	void addPage();
 	RC removePageRecord();
-	//RC erasePageFromHeader(FileHandle& fileHandle);
+	RC erasePageFromHeader(FileHandle& fileHandle);
 	unsigned int numOfPages();
 	RC splitBucket();
 	RC mergeBuckets();
