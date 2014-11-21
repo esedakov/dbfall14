@@ -222,7 +222,7 @@ protected:
 	RC mergeBuckets();
 	RC mergeBuckets(BUCKET_NUMBER lowBucket);
 private:
-	IXFileHandle _ixfilehandle;
+	IXFileHandle *_ixfilehandle;
 	void* _key;
 	Attribute _attr;
 	const void* _entryData;
@@ -230,7 +230,7 @@ private:
 	int _curPageNum;
 	void* _curPageData;
 	BUCKET_NUMBER _bktNumber;
-	PFMExtension pfme;
+	PFMExtension *pfme;
 };
 
 #endif

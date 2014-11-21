@@ -186,7 +186,7 @@ void testPFME(IXFileHandle fileHandle)
 		((unsigned int*)( (char*)data + 4 + szOfCharArray ))[1] = i;
 
 		unsigned int length = 4 + szOfCharArray + 4 + 4;
-
+		bool bol;
 		//insert
 		//if( (errCode = rbfm->insertRecord(fileHandle._overBucketDataFileHandler, vAttr, data, rid)) != 0 )
 		//PageNumbers:
@@ -207,7 +207,7 @@ void testPFME(IXFileHandle fileHandle)
 		{
 			cout << "i = " << i;
 		}
-		if( (errCode = pfme.insertTuple(data, length, bktNumber, rid.pageNum, rid.slotNum)) )
+		if( (errCode = pfme.insertTuple(data, length, bktNumber, rid.pageNum, rid.slotNum, bol)) )
 		{
 			cout << "error code: " << errCode;
 			exit(errCode);
