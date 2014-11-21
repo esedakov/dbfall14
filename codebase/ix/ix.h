@@ -172,23 +172,23 @@ class PFMExtension
 public:
 	PFMExtension(IXFileHandle& handle, const BUCKET_NUMBER bkt_number);
 	RC translateVirtualToPhysical(PageNum& physicalPageNum, const BUCKET_NUMBER bktNumber, const PageNum virtalPageNum);
-	RC getPage(const BUCKET_NUMBER bkt_number, const PageNum pageNumber);
+	RC getPage(const BUCKET_NUMBER bkt_number, const PageNum pageNumber, void* buffer);
 	RC getTuple(void* tuple, const BUCKET_NUMBER bkt_number, const PageNum pageNumber, const int slotNumber);
 	RC shiftRecordsToStart(
 			const BUCKET_NUMBER bkt_number, const PageNum startingInPageNumber, const int startingFromSlotNumber);
 	RC shiftRecordsToEnd(
 			const BUCKET_NUMBER bkt_number, const PageNum startingInPageNumber,
 			const int startingFromSlotNumber, unsigned int szInBytes);
-	RC deleteTuple(const BUCKET_NUMBER bkt_number, const PageNum pageNumber, const int slotNumber);
-			//i can also add new parameter => bool lastPageIsEmpty => so that higher level class can perform merge
+	RC deleteTuple(const BUCKET_NUMBER bkt_number, const PageNum pageNumber, const int slotNumber, bool& lastPageIsEmpty);
 	RC insertTuple(
 			void* tupleData, const unsigned int tupleLength, const BUCKET_NUMBER bkt_number,
-			const PageNum pageNumber, const int slotNumber);
-			//i can also add new parameter => bool newPageIsCreated => so that higher level class can perform split
+			const PageNum pageNumber, const int slotNumber, bool& newPage);
+	RC addPage(const void* dataPage, const BUCKET_NUMBER bkt_number);
+	RC getNumberOfEntriesInPage(const BUCKET_NUMBER bkt_number, const PageNum pageNumber, unsigned int& numEntries);
+	RC numOfPages(const BUCKET_NUMBER bkt_number, unsigned int& numPages);
+	RC removePage(const BUCKET_NUMBER bkt_number, const PageNum pageNumber);
 protected:
 	RC writePage(const BUCKET_NUMBER bkt_number, const PageNum pageNumber);
-	RC removePage(const BUCKET_NUMBER bkt_number, const PageNum pageNumber);
-	RC addPage(const void* dataPage, const BUCKET_NUMBER bkt_number);
 	//RC updatePageSizeInHeader(FileHandle& fileHandle, const PageNum pageNumber, const unsigned int freeSpace);
 	RC shiftRecursivelyToEnd(
 			const BUCKET_NUMBER bkt_number, const PageNum currentPageNumber, const unsigned int startingFromSlotNumber,
@@ -202,7 +202,7 @@ private:
 class MetaDataSortedEntries
 {
 public:
-	MetaDataSortedEntries(IXFileHandle& ixfilehandle, BUCKET_NUMBER bucket_number, const Attribute& attr, const void* key, const void* entry);
+	MetaDataSortedEntries(IXFileHandle& ixfilehandle, BUCKET_NUMBER bucket_number, const Attribute& attr, void* key, const void* entry, unsigned int entryLength);
 	~MetaDataSortedEntries();
 	void insertEntry();
 	RC searchEntry(RID& position, void* entry);
@@ -210,24 +210,27 @@ public:
 protected:
 	int searchEntryInPage(RID& result, const PageNum& pageNumber, const int indexStart, const int indexEnd);
 	bool searchEntryInArrayOfPages(RID& position, const int start, const int end);
-	RC getPage();
-	RC translateToPageNumber(const PageNum& pagenumber, PageNum& result);
+	//RC getPage();	//replaced by equivalent in the PFME
+	//RC translateToPageNumber(const PageNum& pagenumber, PageNum& result);	//exists in PFME
 	//PageDirSlot* getRecordSlotFromCurrentPage(unsigned int slotNumber);
 	RC getTuple(const PageNum pageNumber, const unsigned int slotNumber, void* entry);
-	//void addPage();
-	//RC removePageRecord();
-	//RC erasePageFromHeader(FileHandle& fileHandle);
-	unsigned int numOfPages();
+	//void addPage();	//replaced by equivalent in PFME
+	RC removePageRecord();
+	//RC erasePageFromHeader(FileHandle& fileHandle);	//not using the PFM headers (no need to update)
+	//unsigned int numOfPages();	//moved to PFME
 	RC splitBucket();
 	RC mergeBuckets();
+	RC mergeBuckets(BUCKET_NUMBER lowBucket);
 private:
-	IXFileHandle _ixfilehandle;
-	void* _key;
-	Attribute _attr;
-	const void* _entryData;
-	int _curPageNum;
-	void* _curPageData;
+	IXFileHandle *_ixfilehandle;
 	BUCKET_NUMBER _bktNumber;
+	Attribute _attr;
+	void* _key;
+	const void* _entryData;
+	void* _curPageData;
+	unsigned int _entryLength;
+	int _curPageNum;
+	PFMExtension *pfme;
 };
 
 #endif
