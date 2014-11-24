@@ -29,6 +29,7 @@ struct indexInfo
 
 class IndexManager {
  public:
+  std::vector<IX_ScanIterator*> _iterators;
   static IndexManager* instance();
 
   // Create index file(s) to manage an index
@@ -105,6 +106,17 @@ class IndexManager {
 };
 
 
+//class IX_ScanIterator {
+// public:
+//  IX_ScanIterator();  							// Constructor
+//  ~IX_ScanIterator(); 							// Destructor
+//
+//  RC getNextEntry(RID &rid, void *key);  		// Get next matching entry
+//  RC close();             						// Terminate index scan
+//};
+
+class PFMExtension;
+
 class IX_ScanIterator {
  public:
   IX_ScanIterator();  							// Constructor
@@ -112,6 +124,22 @@ class IX_ScanIterator {
 
   RC getNextEntry(RID &rid, void *key);  		// Get next matching entry
   RC close();             						// Terminate index scan
+  bool reset();
+  bool isEntryAlreadyScanned(const void* entry, unsigned int entryLength);
+  RC incrementToNext();
+  void resetToBucketStart(BUCKET_NUMBER bktNumber);
+  void currentPosition(BUCKET_NUMBER& bkt, PageNum& page, unsigned int& slot);
+  BUCKET_NUMBER _bkt;
+  PageNum _page;
+  unsigned int _slot;
+  std::vector< std::pair<void*, unsigned int> > _alreadyScanned;	//stores separately allocated entry buffers (not pointers)
+  const void* _lowKey;		//NULL is -INF
+  bool _lowKeyInclusive;
+  const void* _highKey;		//NULL is +INF
+  bool _highKeyInclusive;
+  IXFileHandle* _fileHandle;
+  PFMExtension* _pfme;
+  Attribute _attr;
 };
 
 
@@ -183,7 +211,12 @@ private:
 	IXFileHandle* _handle;
 	void* _buffer;
 	PageNum _curVirtualPage;
+	BUCKET_NUMBER _bktNumber;
 };
+
+void getKeyFromEntry(const Attribute& attr, const void* entry, void* key, int& key_length);
+int compareEntryKeyToSeparateKey(const Attribute& attr, const void* entry, const void* key);
+int estimateSizeOfEntry(const Attribute& attr, const void* entry);
 
 class MetaDataSortedEntries
 {
@@ -208,11 +241,9 @@ protected:
 	//RC mergeBuckets(BUCKET_NUMBER lowBucket);
 protected:
 	RC removePageRecord();
-	void getKeyFromEntry(const void* entry, void* key, int& key_length);
 	int compareEntryKeyToClassKey(const void* entry);
 	int compareTwoEntryKeys(const void* entry1, const void* entry2);
 	bool compareEntryRidToAnotherRid(const void* entry, const RID& anotherRid);
-	int estimateSizeOfEntry(const void* entry);
 private:
 	IXFileHandle *_ixfilehandle;
 	BUCKET_NUMBER _bktNumber;

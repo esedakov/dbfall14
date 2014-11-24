@@ -19,6 +19,7 @@
  *
  * -50 = key was not found
  * -51 = cannot shift from one page more data than can fit inside the next page
+ * -52 = attempting to close iterator for more than once
  */
 
 IndexManager* IndexManager::_index_manager = 0;
@@ -330,7 +331,7 @@ RC IndexManager::openFile(const string &fileName, IXFileHandle &ixFileHandle)	//
 	}
 
 	//make sure that primary-bucket file has N+1 pages
-	if( numPages != it->second.N )
+	if( numPages < it->second.N )
 	{
 		//deallocate buffer
 		free(data);
@@ -511,8 +512,15 @@ RC IndexManager::insertEntry(IXFileHandle &ixfileHandle, const Attribute &attrib
 
 	//assume that file handle, attribute, key, and rid are correct
 
+	unsigned int general_hash = hash(attribute, key);
+
 	//hashed key
-	unsigned int hkey = hash_at_specified_level(ixfileHandle._info->N, ixfileHandle._info->Level, hash(attribute, key));
+	unsigned int hkey = hash_at_specified_level(ixfileHandle._info->N, ixfileHandle._info->Level, general_hash);
+
+	if( hkey < ixfileHandle._info->Next )
+	{
+		hkey = hash_at_specified_level(ixfileHandle._info->N, ixfileHandle._info->Level + 1, general_hash);
+	}
 
 	MetaDataSortedEntries mdse(ixfileHandle, hkey, attribute, key);
 
@@ -532,8 +540,15 @@ RC IndexManager::deleteEntry(IXFileHandle &ixfileHandle, const Attribute &attrib
 
 	//assume that file handle, attribute, key, and rid are correct
 
+	unsigned int general_hash = hash(attribute, key);
+
 	//hashed key
-	unsigned int hkey = hash_at_specified_level(ixfileHandle._info->N, ixfileHandle._info->Level, hash(attribute, key));
+	unsigned int hkey = hash_at_specified_level(ixfileHandle._info->N, ixfileHandle._info->Level, general_hash);
+
+	if( hkey < ixfileHandle._info->Next )
+	{
+		hkey = hash_at_specified_level(ixfileHandle._info->N, ixfileHandle._info->Level + 1, general_hash);
+	}
 
 	MetaDataSortedEntries mdse(ixfileHandle, hkey, attribute, key);
 
@@ -625,7 +640,6 @@ RC IndexManager::getNumberOfAllPages(IXFileHandle &ixfileHandle, unsigned &numbe
 	return errCode;
 }
 
-
 RC IndexManager::scan(IXFileHandle &ixfileHandle,
     const Attribute &attribute,
     const void      *lowKey,
@@ -634,25 +648,268 @@ RC IndexManager::scan(IXFileHandle &ixfileHandle,
     bool        	highKeyInclusive,
     IX_ScanIterator &ix_ScanIterator)
 {
-	return -1;
+	ix_ScanIterator.reset();
+	//memcpy(&ix_ScanIterator._attr, &attribute, sizeof(Attribute));
+	ix_ScanIterator._attr.length = attribute.length;
+	ix_ScanIterator._attr.name = attribute.name;
+	ix_ScanIterator._attr.type = attribute.type;
+	ix_ScanIterator._fileHandle = &ixfileHandle;
+	ix_ScanIterator._pfme = new PFMExtension(ixfileHandle, 0);
+	ix_ScanIterator._lowKey = lowKey;
+	ix_ScanIterator._lowKeyInclusive = lowKeyInclusive;
+	ix_ScanIterator._highKey = highKey;
+	ix_ScanIterator._highKeyInclusive = highKeyInclusive;
+	_iterators.push_back(&ix_ScanIterator);
+
+	return 0;
+}
+
+void IX_ScanIterator::currentPosition(BUCKET_NUMBER& bkt, PageNum& page, unsigned int& slot)
+{
+	bkt = _bkt;
+	page = _page;
+	slot = _slot;
+}
+
+bool IX_ScanIterator::reset()
+{
+	bool ret = false;
+	if( _pfme != NULL)
+	{
+		ret = true;
+		_bkt = 0;
+		_page = 0;
+		_slot = 0;
+		_lowKey = NULL;
+		_lowKeyInclusive = false;
+		_highKey = NULL;
+		_highKeyInclusive = false;
+		_fileHandle = NULL;
+		free(_pfme);
+		_pfme = NULL;
+		std::vector< std::pair<void*, unsigned int> >::iterator it = _alreadyScanned.begin(), imax = _alreadyScanned.end();
+		for( ; it != imax; it++ )
+		{
+			free(it->first);
+		}
+
+		IndexManager* ix = IndexManager::instance();
+
+		_alreadyScanned.clear();
+		std::vector<IX_ScanIterator*>::iterator
+			jt = ix->_iterators.begin(),
+			jmax = ix->_iterators.end();
+		for( ; jt != jmax; jt++ )
+		{
+			if( (char*)(*jt) == (char*)this )
+			{
+				ix->_iterators.erase(jt);
+			}
+		}
+	}
+	return ret;
 }
 
 IX_ScanIterator::IX_ScanIterator()
+:  _bkt(0), _page(0), _slot(0), _alreadyScanned(std::vector< std::pair<void*, unsigned int> >()),
+  _lowKey(NULL), _lowKeyInclusive(false), _highKey(NULL), _highKeyInclusive(false), _fileHandle(NULL),
+  _pfme(NULL)
 {
 }
 
 IX_ScanIterator::~IX_ScanIterator()
 {
+	reset();
+}
+
+bool IX_ScanIterator::isEntryAlreadyScanned(const void* entry, unsigned int entryLength)
+{
+	bool result = false;
+
+	//scan thru the list of keys in the bucket
+	std::vector< std::pair<void*, unsigned int> >::iterator
+		it = _alreadyScanned.begin(), imax = _alreadyScanned.end();
+	for( ; it != imax; it++ )
+	{
+		if( entryLength == it->second && memcmp(it->first, entry, it->second) == 0 )
+		{
+			result = true;
+			break;
+		}
+	}
+
+	return result;
 }
 
 RC IX_ScanIterator::getNextEntry(RID &rid, void *key)
 {
-	return -1;
+	RC errCode = 0;
+
+	//check if scan is over or not (i.e. if maximum number of buckets has been reached)
+	unsigned int numBuckets = 0;
+	if( (errCode = IndexManager::instance()->getNumberOfPrimaryPages(*_fileHandle, numBuckets)) != 0 )
+	{
+		return errCode;
+	}
+	if( _bkt >= numBuckets )
+	{
+		return IX_EOF;
+	}
+
+	//iterate over the buckets, until the entry is found
+	for( ; _bkt < numBuckets; _bkt++ )
+	{
+		//determine number of pages in the current bucket
+		unsigned int maxPages = 0;
+		if( (errCode = _pfme->numOfPages(_bkt, maxPages)) != 0 )
+		{
+			return errCode;
+		}
+
+		//iterate over the pages of the current bucket
+		for( ; _page < maxPages; _page++ )
+		{
+			//determine number of slots in the current page
+			unsigned int maxSlots = 0;
+			if( (errCode = _pfme->getNumberOfEntriesInPage(_bkt, _page, maxSlots)) != 0 )
+			{
+				return errCode;
+			}
+
+			//iterate over the slots
+			for( ; _slot < maxSlots; _slot++ )
+			{
+				//buffer for keeping the current entry
+				void* entry = malloc(PAGE_SIZE);
+				memset(entry, 0, PAGE_SIZE);
+
+				//get current tuple
+				if( (errCode = _pfme->getTuple(entry, _bkt, _page, _slot)) != 0 )
+				{
+					//increment to next page and reset slot number
+					_page++;
+					_slot = 0;
+
+					//quit the inner loop and let the outer to decide whether to continue or not, depending if there are more pages left
+					break;
+				}
+
+				//estimate size of entry
+				int entryLength = estimateSizeOfEntry(_attr, entry);
+
+				//check if this entry has already been processed
+				if( isEntryAlreadyScanned(entry, entryLength) == false )
+				{
+					//for function "compareEntryKeyToSeparateKey" the output follows pattern outlined below:
+					//+1 entry.key is less than the another key
+					//0 entry.key is equal to the another key
+					//-1 entry.key is greater than the another key
+
+					int lowRes = 0, highRes = 0;
+
+					//if necessary perform comparison between entry and low key
+					if( _lowKey != NULL )
+					{
+						lowRes = compareEntryKeyToSeparateKey(_attr, entry, _lowKey);
+					}
+					else
+					{
+						//entry > lowKey
+						lowRes = -1;
+					}
+
+					//if necessary perform comparison between entry and high key
+					if( _highKey != NULL )
+					{
+						highRes = compareEntryKeyToSeparateKey(_attr, entry, _highKey);
+					}
+					else
+					{
+						//entry < highKey
+						highRes = 1;
+					}
+
+					int lowBoundary = _lowKeyInclusive ? 0 : -1,
+						highBoundary = _highKeyInclusive ? 0 : 1;
+
+					//check if an entry is within the given boundaries
+					if( lowRes <= lowBoundary && highRes >= highBoundary )
+					{
+						//the key is found
+						//1. copy entry payLoad to attribute RID
+						memcpy(&rid, (char*)entry + entryLength - sizeof(RID), sizeof(RID));
+						//2. copy entry key to attribute key
+						memcpy(&key, (char*)entry, entryLength);
+						//3. increment slot to next
+						incrementToNext();
+						//success
+						return errCode;
+					}
+				}
+				else
+				{
+					//if entry has already been processed, then deallocate its buffer and go to the next
+					free(entry);
+				}
+			}
+			//reset slot number
+			_slot = 0;
+		}
+		//reset page number
+		_page = 0;
+	}
+	_bkt = 0;
+
+	//return end of index
+	return IX_EOF;
+}
+
+RC IX_ScanIterator::incrementToNext()
+{
+	RC errCode = 0;
+
+	_slot++;
+	//	3.1 if next slot does not exist in the given page => increment to next page (set slot = 0)
+	unsigned int numEntries = 0;
+	if( (errCode = _pfme->getNumberOfEntriesInPage(_bkt, _page, numEntries)) != 0 )
+	{
+		return errCode;
+	}
+	if( _slot >= numEntries )
+	{
+		_page++;
+		_slot = 0;
+	}
+	//		3.1.1 if next page does not exist => increment to next bucket (set page = 0, slot = 0,
+	//			  empty vector that stores keys in the bucket)
+	unsigned int numPages = 0;
+	if( (errCode = _pfme->numOfPages(_bkt, numPages)) != 0 )
+	{
+		return errCode;
+	}
+	if( _page >= numPages )
+	{
+		_page = 0;
+		_slot = 0;
+		_bkt++;
+		_alreadyScanned.clear();
+	}
+
+	return errCode;
+}
+
+void IX_ScanIterator::resetToBucketStart(BUCKET_NUMBER bkt)
+{
+	_bkt = bkt;
+	_page = 0;
+	_slot = 0;
 }
 
 RC IX_ScanIterator::close()
 {
-	return -1;
+	if( reset() == false )
+		return -52;	//attempting to close iterator for more than once
+	return 0;
 }
 
 
@@ -826,6 +1083,9 @@ void IX_PrintError (RC rc)
 	case -51:
 		errMsg = "cannot shift from one page more data than can fit inside the next page";
 		break;
+	case -52:
+		errMsg = "attempting to close iterator for more than once";
+		break;
 	}
 	//print message
 	std::cout << "component: " << compName << " => " << errMsg;
@@ -901,10 +1161,10 @@ RC PFMExtension::getPage(const BUCKET_NUMBER bkt_number, const PageNum pageNumbe
 }
 
 PFMExtension::PFMExtension(IXFileHandle& handle, BUCKET_NUMBER bkt_number)
-: _handle(&handle), _buffer(malloc(PAGE_SIZE)), _curVirtualPage(0)
+: _handle(&handle), _buffer(malloc(PAGE_SIZE)), _curVirtualPage(0), _bktNumber(bkt_number)
 {
 	RC errCode = 0;
-	if( (errCode = getPage(bkt_number, _curVirtualPage, _buffer)) != 0 )
+	if( (errCode = getPage(_bktNumber, _curVirtualPage, _buffer)) != 0 )
 	{
 		IX_PrintError(errCode);
 		exit(errCode);
@@ -933,7 +1193,7 @@ RC PFMExtension::printBucket(const BUCKET_NUMBER bktNumber, const Attribute& att
 	for(pageNumber = 0; pageNumber < maxPages; pageNumber++)
 	{
 		//load the current page
-		if( pageNumber != _curVirtualPage )
+		if( pageNumber != _curVirtualPage || _bktNumber != bktNumber )
 		{
 			//read data page
 			if( (errCode = getPage(bktNumber, pageNumber, _buffer)) != 0 )
@@ -944,6 +1204,7 @@ RC PFMExtension::printBucket(const BUCKET_NUMBER bktNumber, const Attribute& att
 			}
 
 			_curVirtualPage = pageNumber;
+			_bktNumber = bktNumber;
 		}
 
 		//get pointer to the end of directory slots
@@ -990,7 +1251,7 @@ RC PFMExtension::printBucket(const BUCKET_NUMBER bktNumber, const Attribute& att
 		std::cout << "   a. # of entries : " << *numSlots << endl;
 
 		//load the current page
-		if( pageNumber != _curVirtualPage )
+		if( pageNumber != _curVirtualPage || _bktNumber != bktNumber )
 		{
 			//read data page
 			if( (errCode = getPage(bktNumber, pageNumber, _buffer)) != 0 )
@@ -1001,17 +1262,20 @@ RC PFMExtension::printBucket(const BUCKET_NUMBER bktNumber, const Attribute& att
 			}
 
 			_curVirtualPage = pageNumber;
+			_bktNumber = bktNumber;
 		}
 
 		std::cout << "   b. entries: ";
 
 		//pointer to the start of the list of directory slots
-		PageDirSlot* ptrEndOfDirSlot = (PageDirSlot*)( startOfDirSlot - *numSlots );
+		PageDirSlot* ptrEndOfDirSlot = (PageDirSlot*)( startOfDirSlot - *numSlots - 1 );
 
 		PageDirSlot* curSlot = startOfDirSlot - 1;
 
+		unsigned int index = 0;
+
 		//iterate over the slots and thus find position of each record
-		while( curSlot != ptrEndOfDirSlot )
+		while( curSlot != ptrEndOfDirSlot && index < *numSlots )
 		{
 			//record position
 			void* record = (char*)_buffer + curSlot->_offRecord;
@@ -1050,6 +1314,7 @@ RC PFMExtension::printBucket(const BUCKET_NUMBER bktNumber, const Attribute& att
 
 			//update current slot
 			curSlot--;
+			index++;
 		}
 
 		std::cout << endl << endl;
@@ -1072,7 +1337,7 @@ RC PFMExtension::getTuple(void* tuple, BUCKET_NUMBER bkt_number, const unsigned 
 	//FileHandle handle = ( _curVirtualPage == 0 ? _handle->_primBucketDataFileHandler : _handle->_overBucketDataFileHandler );
 
 	//if necessary read in the page
-	if( pageNumber != _curVirtualPage )
+	if( pageNumber != _curVirtualPage || _bktNumber != bkt_number )
 	{
 		//write the current page to some (primary or overflow depending on the current virtual page number) file
 		if( (errCode = writePage(bkt_number, _curVirtualPage)) != 0 )
@@ -1089,6 +1354,7 @@ RC PFMExtension::getTuple(void* tuple, BUCKET_NUMBER bkt_number, const unsigned 
 		}
 
 		_curVirtualPage = pageNumber;
+		_bktNumber = bkt_number;
 	}
 
 	/*
@@ -1141,9 +1407,10 @@ RC PFMExtension::shiftRecordsToStart //TESTED, seems to work
 	RC errCode = 0;
 
 	//if necessary read in the page
-	if( startingInPageNumber != _curVirtualPage )
+	if( startingInPageNumber != _curVirtualPage || _bktNumber != bkt_number )
 	{
 		_curVirtualPage = startingInPageNumber;
+		_bktNumber = bkt_number;
 
 		//read data page
 		if( (errCode = getPage(bkt_number, startingInPageNumber, _buffer)) != 0 )
@@ -1369,7 +1636,7 @@ RC PFMExtension::shiftRecursivelyToEnd //NOT TESTED
 	RC errCode = 0;
 
 	//if necessary read in the page
-	if( currentPageNumber != _curVirtualPage )
+	if( currentPageNumber != _curVirtualPage || _bktNumber != bkt_number )
 	{
 		//read data page
 		if( (errCode = getPage(bkt_number, currentPageNumber, _buffer)) != 0 )
@@ -1380,6 +1647,7 @@ RC PFMExtension::shiftRecursivelyToEnd //NOT TESTED
 
 		//update
 		_curVirtualPage = currentPageNumber;
+		_bktNumber = bkt_number;
 	}
 
 	//get pointer to the end of directory slots
@@ -1497,13 +1765,14 @@ RC PFMExtension::shiftRecursivelyToEnd //NOT TESTED
 	//   ^                     ^
 	//   |                     |
 	// start                  end
-	//star is specified by startingFromSlotNumber
+	//start is specified by startingFromSlotNumber
 	//end is right before the last item that will be deleted due to shift (on image item to be deleted has 'XX' content in it)
 
 	PageDirSlot* ptrStartSlot = startOfDirSlot - startingFromSlotNumber;
 	void* startOfShifting = NULL;
 	if( startingFromSlotNumber > 0 )
-		startOfShifting = (char*)_buffer + ptrStartSlot->_offRecord + ptrStartSlot->_szRecord;
+		startOfShifting = (char*)_buffer + ptrStartSlot->_offRecord +
+			((startingFromSlotNumber == *numSlots && shiftRecordsToNextPage.size() > 0) ? 0 : ptrStartSlot->_szRecord);
 	else
 		startOfShifting = (char*)_buffer;
 
@@ -1529,7 +1798,7 @@ RC PFMExtension::shiftRecursivelyToEnd //NOT TESTED
 
 	//3. copy information into freed up array of records AND setup slot offsets and size attributes
 
-	currentSlot = ptrStartSlot - 1;
+	currentSlot = ptrStartSlot - (szForExtraSlots == 0 ? 0 : 1);
 	shiftInIter = slotsToShiftFromPriorPage.begin();
 	shiftInMax = slotsToShiftFromPriorPage.end();
 	for( ; shiftInIter != shiftInMax; shiftInIter++ )
@@ -1547,10 +1816,13 @@ RC PFMExtension::shiftRecursivelyToEnd //NOT TESTED
 
 	//update the shifted slots' offsets (since they remained the same and now are incorrect)
 	PageDirSlot* updatedEndSlot = eraseSlotsTillThisOne - slotsToShiftFromPriorPage.size() - 1;
-	while( currentSlot != updatedEndSlot )
+	if( (char*)currentSlot > (char*)updatedEndSlot )
 	{
-		currentSlot->_offRecord = (currentSlot + 1)->_offRecord + (currentSlot + 1)->_szRecord;
-		currentSlot--;
+		while( currentSlot != updatedEndSlot )
+		{
+			currentSlot->_offRecord = (currentSlot + 1)->_offRecord + (currentSlot + 1)->_szRecord;
+			currentSlot--;
+		}
 	}
 
 	//4. update offset to free space
@@ -1849,7 +2121,7 @@ RC PFMExtension::getNumberOfEntriesInPage(const BUCKET_NUMBER bkt_number, const 
 	RC errCode = 0;
 
 	//if necessary read in the page
-	if( pageNumber != _curVirtualPage )
+	if( pageNumber != _curVirtualPage || bkt_number != _bktNumber )
 	{
 		//read data page
 		if( (errCode = getPage(bkt_number, pageNumber, _buffer)) != 0 )
@@ -1860,6 +2132,7 @@ RC PFMExtension::getNumberOfEntriesInPage(const BUCKET_NUMBER bkt_number, const 
 
 		//update
 		_curVirtualPage = pageNumber;
+		_bktNumber = bkt_number;
 	}
 
 	//get pointer to the end of directory slots
@@ -2083,7 +2356,7 @@ bool MetaDataSortedEntries::searchEntryInArrayOfPages(RID& position, const int s
 //+1 entry.key is less than the class key
 //0 entry.key is equal to the class key
 //-1 entry.key is greater than the class key
-int MetaDataSortedEntries::compareEntryKeyToClassKey(const void* entry)
+int compareEntryKeyToSeparateKey(const Attribute& attr, const void* entry, const void* key)
 {
 	int result = 0;
 
@@ -2094,37 +2367,45 @@ int MetaDataSortedEntries::compareEntryKeyToClassKey(const void* entry)
 
 	//depending on the type of class key, perform a different comparison
 	//note: assuming that the class key shares type with the entry key, or else impossible to keep consistent behavior of algorithm
-	switch( _attr.type )
+	switch( attr.type )
 	{
 	case TypeInt:
 		ikey = ((int*)entry)[0];
-		if( ikey < ((int*)_key)[0] )
-			result = -1;
-		else if( ikey == ((int*)_key)[0] )
-			result = 0;
+		if( ikey < ((int*)key)[0] )
+			result = 1;	//entry.key < class key
+		else if( ikey == ((int*)key)[0] )
+			result = 0;	//entry.key == class key
 		else
-			result = 1;
+			result = -1; //entry.key > class key
 		break;
 	case TypeReal:
 		fkey = ((float*)entry)[0];
-		if( fkey < ((float*)_key)[0] )
-			result = -1;
-		else if( fkey == ((float*)_key)[0] )
+		if( fkey < ((float*)key)[0] )
+			result = 1;
+		else if( fkey == ((float*)key)[0] )
 			result = 0;
 		else
-			result = 1;
+			result = -1;
 		break;
 	case TypeVarChar:
 		max = ((unsigned int*)entry)[0] + sizeof(unsigned int);
 		charArray = (char*)malloc( max + 1 );
 		memcpy( charArray, (char*)entry, max );
 		charArray[max] = '\0';	//need to convert key to char array in constructor if attr.type == VarChar
-		result = strcmp((char*)_key, charArray);
+		result = strcmp((char*)key, charArray);
+		//class key < entry.key => -1
+		//class key == entry.key => 0
+		//class key > entry.key => +1
 		free(charArray);
 		break;
 	}
 
 	return result;
+}
+
+int MetaDataSortedEntries::compareEntryKeyToClassKey(const void* entry)
+{
+	return compareEntryKeyToSeparateKey(_attr, entry, _key);
 }
 
 int MetaDataSortedEntries::compareTwoEntryKeys(const void* entry1, const void* entry2)
@@ -2140,25 +2421,33 @@ int MetaDataSortedEntries::compareTwoEntryKeys(const void* entry1, const void* e
 	//note: assuming that the class key shares type with the entry key, or else impossible to keep consistent behavior of algorithm
 	switch( _attr.type )
 	{
+	/*
+	 * if( ikey < ((int*)key)[0] )
+			result = 1;	//entry.key < class key
+		else if( ikey == ((int*)key)[0] )
+			result = 0;	//entry.key == class key
+		else
+			result = -1; //entry.key > class key
+	 */
 	case TypeInt:
 		ikey1 = ((int*)entry1)[0];
 		ikey2 = ((int*)entry2)[0];
 		if( ikey1 < ikey2 )
-			result = -1;
+			result = -1;	//entry1.key < entry2.key
 		else if( ikey1 == ikey2 )
-			result = 0;
+			result = 0;		//entry1.key == entry2.key
 		else
-			result = 1;
+			result = 1;		//entry1.key > entry2.key
 		break;
 	case TypeReal:
 		fkey1 = ((float*)entry1)[0];
 		fkey2 = ((float*)entry2)[0];
 		if( fkey1 < fkey2 )
-			result = -1;
+			result = -1;	//entry1.key < entry2.key
 		else if( fkey1 == fkey2 )
-			result = 0;
+			result = 0;		//entry1.key == entry2.key
 		else
-			result = 1;
+			result = 1;		//entry1.key > entry2.key
 		break;
 	case TypeVarChar:
 		max1 = ((unsigned int*)entry1)[0] + sizeof(unsigned int);
@@ -2170,6 +2459,9 @@ int MetaDataSortedEntries::compareTwoEntryKeys(const void* entry1, const void* e
 		charArray1[max1] = '\0';	//need to convert key to char array in constructor if attr.type == VarChar
 		charArray2[max2] = '\0';	//need to convert key to char array in constructor if attr.type == VarChar
 		result = strcmp(charArray1, charArray2);
+		//entry1.key < entry2.key => -1
+		//entry1.key == entry2.key => 0
+		//entry1.key > entry2.key => +1
 		free(charArray1);
 		free(charArray2);
 		break;
@@ -2381,10 +2673,10 @@ bool MetaDataSortedEntries::compareEntryRidToAnotherRid(const void* entry, const
 	return result;
 }
 
-void MetaDataSortedEntries::getKeyFromEntry(const void* entry, void* key, int& key_length)
+void getKeyFromEntry(const Attribute& attr, const void* entry, void* key, int& key_length)
 {
 	//determine length and starting position for the given type of key
-	switch(_attr.type)
+	switch(attr.type)
 	{
 	case TypeInt:
 		key_length = sizeof(int);
@@ -2558,6 +2850,26 @@ RC MetaDataSortedEntries::deleteEntry(const RID& rid)
 		return -43;
 	}
 
+	//if currently removed element is also pointed by a scanning iterator then make sure that iterator is incremented to the next position
+	std::vector<IX_ScanIterator*>::iterator
+		l = IndexManager::instance()->_iterators.begin(),
+		lmax = IndexManager::instance()->_iterators.end();
+	for( ; l != lmax; l++ )
+	{
+		BUCKET_NUMBER itBucket = 0;
+		PageNum itPage = 0;
+		unsigned int itSlot = 0;
+		(*l)->currentPosition(itBucket, itPage, itSlot);
+		if( itPage == position.pageNum && itSlot == position.slotNum && itBucket == _bktNumber )
+		{
+			if( (errCode = (*l)->incrementToNext()) != 0 )
+			{
+				free(entry);
+				return errCode;
+			}
+		}
+	}
+
 	//delete entry using PFMExtension (by shifting entries to the start of the bucket)
 	bool lastPageIsEmpty;
 	if((errCode=pfme->deleteTuple(_bktNumber, position.pageNum, position.slotNum, lastPageIsEmpty))!=0)
@@ -2606,6 +2918,22 @@ RC MetaDataSortedEntries::deleteEntry(const RID& rid)
 		{
 			free(entry);
 			return errCode;
+		}
+
+		//if any of the pages belongs that belong to this or the image bucket are being scanned right now,
+		//then reset the iterator to the beginning of the low bucket
+		l = IndexManager::instance()->_iterators.begin();
+		lmax = IndexManager::instance()->_iterators.end();
+		for( ; l != lmax; l++ )
+		{
+			BUCKET_NUMBER itBkt = 0;
+			PageNum itPage = 0;
+			unsigned int itSlot = 0;
+			(*l)->currentPosition(itBkt, itPage, itSlot);
+			if( itBkt == _bktNumber )
+			{
+				(*l)->resetToBucketStart(_bktNumber);
+			}
 		}
 
 		//allocate buffer for meta-data page
@@ -2663,11 +2991,11 @@ RC MetaDataSortedEntries::deleteEntry(const RID& rid)
 	return errCode;
 }
 
-int MetaDataSortedEntries::estimateSizeOfEntry(const void* entry)
+int estimateSizeOfEntry(const Attribute& attr, const void* entry)
 {
 	int sz = sizeof(RID);
 
-	switch(_attr.type)
+	switch(attr.type)
 	{
 	case TypeInt:
 		sz += sizeof(int);
@@ -2718,7 +3046,7 @@ RC MetaDataSortedEntries::splitBucket()
 
 	//iterate over the lower bucket
 	int pageNum = 0, slotNum = 0;
-	for( ; pageNum < (int)maxPages; pageNum++ )
+	for( pageNum = 0; pageNum < (int)maxPages; pageNum++ )
 	{
 		//determine number of slots in the current page
 		unsigned int maxSlots = 0;
@@ -2729,7 +3057,7 @@ RC MetaDataSortedEntries::splitBucket()
 		}
 
 		//iterate over the slots
-		for( ; slotNum < (int)maxSlots; slotNum++ )
+		for( slotNum = 0; slotNum < (int)maxSlots; slotNum++ )
 		{
 			//get current tuple
 			if( (errCode = pfme->getTuple(entry, bktNumber[0], pageNum, slotNum)) != 0 )
@@ -2742,12 +3070,13 @@ RC MetaDataSortedEntries::splitBucket()
 				break;
 			}
 
+			//need to allocate a buffer for the key in order to perform hashing at Level+1
 			void* key = malloc(PAGE_SIZE);
 			memset(key, 0, PAGE_SIZE);
 			int key_length = 0;
 
 			//get key from acquired entry
-			getKeyFromEntry(entry, key, key_length);
+			getKeyFromEntry(_attr, entry, key, key_length);
 
 			//hash the key
 			unsigned int hashed_key = IndexManager::instance()->hash(_attr, key);
@@ -2757,15 +3086,23 @@ RC MetaDataSortedEntries::splitBucket()
 				IndexManager::instance()->hash_at_specified_level(
 					_ixfilehandle->_info->N, _ixfilehandle->_info->Level + 1, hashed_key );
 
+			//also need a separate (individual) copy of the entry
+			unsigned int szOfEntryBuffer = key_length + sizeof(RID);
+			void* bufForEntry = malloc(szOfEntryBuffer);
+			memcpy(bufForEntry, entry, szOfEntryBuffer);
+
 			//insert item into appropriate temporary bucket buffer
 			if( hashedKey == _bktNumber )
 			{
-				output[0].push_back( std::pair<void*, unsigned int>( key, key_length ) );
+				output[0].push_back( std::pair<void*, unsigned int>( bufForEntry, szOfEntryBuffer ) );
 			}
 			else
 			{
-				output[1].push_back( std::pair<void*, unsigned int>( key, key_length) );
+				output[1].push_back( std::pair<void*, unsigned int>( bufForEntry, szOfEntryBuffer ) );
 			}
+
+			//key buffer is no longer necessary, deallocate it
+			free(key);
 		}
 	}
 
@@ -2937,7 +3274,7 @@ RC MetaDataSortedEntries::mergeBuckets()
 		}
 
 		//allocate buffer for the tuple and copy it in
-		sz_of_buf = estimateSizeOfEntry( tuples[selected_tuple_index] );
+		sz_of_buf = estimateSizeOfEntry( _attr, tuples[selected_tuple_index] );
 		buf = malloc( sz_of_buf );
 		memcpy(buf, tuples[selected_tuple_index], sz_of_buf);
 
