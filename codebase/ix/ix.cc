@@ -2068,6 +2068,7 @@ RC PFMExtension::emptyOutSpecifiedBucket(const BUCKET_NUMBER bkt_number)
 	{
 		pageMax += _handle->_info->_overflowPageIds[bkt_number].size();
 	}
+	pageNum = pageMax - 1;	//start from the ending page
 
 	//setup the page sized buffer for overwriting the contents of the pages in the bucket
 	void* nullingBuffer = malloc(PAGE_SIZE);
@@ -2107,7 +2108,7 @@ RC PFMExtension::emptyOutSpecifiedBucket(const BUCKET_NUMBER bkt_number)
 		}
 
 		//go to the next page
-		pageNum++;
+		pageNum--;
 	}
 
 	//free buffer
@@ -2586,10 +2587,10 @@ RC MetaDataSortedEntries::insertEntry(const RID& rid)
 	// if new page was added, perform a split
 	if( newPage )
 	{
-		std::cout << endl << "primary data file:" << endl;
-		printFile(_ixfilehandle->_primBucketDataFileHandler);
-		std::cout << endl << "overflow data file:" << endl;
-		printFile(_ixfilehandle->_overBucketDataFileHandler);
+		//std::cout << endl << "primary data file:" << endl;
+		//printFile(_ixfilehandle->_primBucketDataFileHandler);
+		//std::cout << endl << "overflow data file:" << endl;
+		//printFile(_ixfilehandle->_overBucketDataFileHandler);
 
 		//process split
 		_bktNumber = _ixfilehandle->_info->Next;
@@ -2599,10 +2600,10 @@ RC MetaDataSortedEntries::insertEntry(const RID& rid)
 			return errCode;
 		}
 
-		std::cout << endl << "primary data file:" << endl;
-		printFile(_ixfilehandle->_primBucketDataFileHandler);
-		std::cout << endl << "overflow data file:" << endl;
-		printFile(_ixfilehandle->_overBucketDataFileHandler);
+		//std::cout << endl << "primary data file:" << endl;
+		//printFile(_ixfilehandle->_primBucketDataFileHandler);
+		//std::cout << endl << "overflow data file:" << endl;
+		//printFile(_ixfilehandle->_overBucketDataFileHandler);
 
 		//check if we need to increment level
 		if( _ixfilehandle->_info->Next == _ixfilehandle->_info->N * (int)pow(2.0, (int)_ixfilehandle->_info->Level) )
@@ -3130,11 +3131,48 @@ RC MetaDataSortedEntries::splitBucket()
 		for( ; it != max; it++ )
 		{
 			//insert current entry into the appropriate bucket
-			if( (errCode = bucketController[i]->insertTuple(it->first, it->second, bktNumber[i], pageNum, slotNum, newPage)) != 0 )
+			if( (errCode = bucketController[i]->insertTuple(it->first, it->second, bktNumber[i], pageNum, slotNum, newPage)) == -23 )
+			{
+				IX_PrintError(errCode);
+				return errCode;
+			}
+
+			//debugging
+			if( maxPages == 4 && (slotNum == 202 || slotNum == 203 || slotNum == 204) )
+			{
+			//	std::cout << endl << "primary data file:" << endl;
+			//	printFile(_ixfilehandle->_primBucketDataFileHandler);
+			//	std::cout << endl << "overflow data file:" << endl;
+			//	printFile(_ixfilehandle->_overBucketDataFileHandler);
+	            unsigned int numberOfPagesFromFunction = 0;
+	        	// Get number of primary pages
+	            RC rc = IndexManager::instance()->getNumberOfPrimaryPages(*_ixfilehandle, numberOfPagesFromFunction);
+	            if(rc != 0)
+	            {
+	            	cout << "getNumberOfPrimaryPages() failed." << endl;
+	            	//indexManager->closeFile(ixfileHandle);
+	        		return -1;
+	            }
+
+	        	// Print Entries in each page
+	        	for (unsigned i = 0; i < numberOfPagesFromFunction; i++) {
+	        		rc = IndexManager::instance()->printIndexEntriesInAPage(*_ixfilehandle, _attr, i);
+	        		if (rc != 0) {
+	                	cout << "printIndexEntriesInAPage() failed." << endl;
+	        			//indexManager->closeFile(ixfileHandle);
+	        			return -1;
+	        		}
+	        	}
+			}
+
+			//update slot number
+			slotNum++;
+
+			if( newPage )
 			{
 				//current page is full, go to the next
 				pageNum++;
-				slotNum = 0;
+				slotNum = 1;
 
 				//check whether it is some PFME issue
 				if( it == output[i].begin() )
@@ -3144,14 +3182,7 @@ RC MetaDataSortedEntries::splitBucket()
 					free(bucketController[1]);
 					return -51;	//PFME is buggy, since page is not full, but it is claimed to be full
 				}
-
-				//repeat the insertion
-				it--;
-				continue;
 			}
-
-			//update slot number
-			slotNum++;
 
 			//deallocate buffer
 			free(it->first);

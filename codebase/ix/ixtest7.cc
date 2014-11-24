@@ -67,6 +67,35 @@ int testCase_7(const string &indexFileName, const Attribute &attribute)
         rid.pageNum = i;
         rid.slotNum = i;
 
+        /*if( i == 1633 || i == 613 || i == 612 || i == 614 || i == 615 || i == 816 || i == 817 || i == 818 || i == 819 )
+        {
+        	cout << "i = " << i << endl;
+            unsigned int numberOfPagesFromFunction = 0;
+        	// Get number of primary pages
+            rc = indexManager->getNumberOfPrimaryPages(ixfileHandle, numberOfPagesFromFunction);
+            if(rc != success)
+            {
+            	cout << "getNumberOfPrimaryPages() failed." << endl;
+            	indexManager->closeFile(ixfileHandle);
+        		return fail;
+            }
+
+        	// Print Entries in each page
+        	for (unsigned i = 0; i < numberOfPagesFromFunction; i++) {
+        		rc = indexManager->printIndexEntriesInAPage(ixfileHandle, attribute, i);
+        		if (rc != success) {
+                	cout << "printIndexEntriesInAPage() failed." << endl;
+        			indexManager->closeFile(ixfileHandle);
+        			return fail;
+        		}
+        	}
+        }
+
+        if( i == 613 )
+        {
+        	cout << ">>>>>>> i = " << i << endl;
+        }*/
+
         rc = indexManager->insertEntry(ixfileHandle, attribute, &key, rid);
         if(rc != success)
         {
@@ -91,6 +120,30 @@ int testCase_7(const string &indexFileName, const Attribute &attribute)
         	return fail;
         }
     }
+
+    //std::cout << endl << "primary data file:" << endl;
+	//printFile(ixfileHandle._primBucketDataFileHandler);
+	//std::cout << endl << "overflow data file:" << endl;
+	//printFile(ixfileHandle._overBucketDataFileHandler);
+    /*unsigned int numberOfPagesFromFunction = 0;
+	// Get number of primary pages
+    rc = indexManager->getNumberOfPrimaryPages(ixfileHandle, numberOfPagesFromFunction);
+    if(rc != success)
+    {
+    	cout << "getNumberOfPrimaryPages() failed." << endl;
+    	indexManager->closeFile(ixfileHandle);
+		return fail;
+    }
+
+	// Print Entries in each page
+	for (unsigned i = 0; i < numberOfPagesFromFunction; i++) {
+		rc = indexManager->printIndexEntriesInAPage(ixfileHandle, attribute, i);
+		if (rc != success) {
+        	cout << "printIndexEntriesInAPage() failed." << endl;
+			indexManager->closeFile(ixfileHandle);
+			return fail;
+		}
+	}*/
 
     //scan
     compVal = 1234;
