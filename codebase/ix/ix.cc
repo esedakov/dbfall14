@@ -839,7 +839,7 @@ RC IX_ScanIterator::getNextEntry(RID &rid, void *key)
 						//1. copy entry payLoad to attribute RID
 						memcpy(&rid, (char*)entry + entryLength - sizeof(RID), sizeof(RID));
 						//2. copy entry key to attribute key
-						memcpy(&key, (char*)entry, entryLength);
+						memcpy(key, (char*)entry, entryLength - sizeof(RID));	//found error in size of the transfered key
 						//3. increment slot to next
 						incrementToNext();
 						//success
@@ -1656,6 +1656,11 @@ RC PFMExtension::shiftRecursivelyToEnd //NOT TESTED
 	//find out number of directory slots
 	unsigned int* numSlots = ((unsigned int*)startOfDirSlot);
 
+	if( *numSlots == 204 )
+	{
+		cout << "numSlots = " << *numSlots << endl;
+	}
+
 	//check if rid is correct in terms of indexed slot
 	if( startingFromSlotNumber > *numSlots )
 	{
@@ -1706,7 +1711,7 @@ RC PFMExtension::shiftRecursivelyToEnd //NOT TESTED
 	if( freeSpaceInPage < szOfDataToShiftIn + szForExtraSlots )
 	{
 		//iteratively go thru slots (from end to start) to determine the amount of records that need to be erased
-		currentSlot = ptrEndOfDirSlot;
+		currentSlot = ptrEndOfDirSlot;																						//breakpoint
 		while( currentSlot != startOfDirSlot )
 		{
 			//sum up the space of current slot
@@ -1768,13 +1773,15 @@ RC PFMExtension::shiftRecursivelyToEnd //NOT TESTED
 	//start is specified by startingFromSlotNumber
 	//end is right before the last item that will be deleted due to shift (on image item to be deleted has 'XX' content in it)
 
-	PageDirSlot* ptrStartSlot = startOfDirSlot - startingFromSlotNumber;
+	PageDirSlot* ptrStartSlot = startOfDirSlot - startingFromSlotNumber - 1;												//breakpoint
 	void* startOfShifting = NULL;
-	if( startingFromSlotNumber > 0 )
-		startOfShifting = (char*)_buffer + ptrStartSlot->_offRecord +
-			((startingFromSlotNumber == *numSlots && shiftRecordsToNextPage.size() > 0) ? 0 : ptrStartSlot->_szRecord);
-	else
+	if( startingFromSlotNumber == 0 )
 		startOfShifting = (char*)_buffer;
+	else if( startingFromSlotNumber == *numSlots )
+		startOfShifting = _buffer;	//do not care what value this is
+	else
+		startOfShifting = (char*)_buffer + ptrStartSlot->_offRecord;// + ptrStartSlot->_szRecord;
+			//((startingFromSlotNumber == *numSlots && shiftRecordsToNextPage.size() > 0) ? 0 : ptrStartSlot->_szRecord);
 
 	//if it is not the last item that the data is inserted, then perform a shift (if it is the last item, do not do shifting)
 	if( startingFromSlotNumber != *numSlots )
@@ -1791,31 +1798,47 @@ RC PFMExtension::shiftRecursivelyToEnd //NOT TESTED
 			memmove(
 				(char*)(eraseSlotsTillThisOne - slotsToShiftFromPriorPage.size()),
 				(char*)(eraseSlotsTillThisOne),
-				(char*)ptrStartSlot - (char*)eraseSlotsTillThisOne
+				(char*)( ptrStartSlot + 1 ) - (char*)eraseSlotsTillThisOne
 			);
 		}
 	}
 
 	//3. copy information into freed up array of records AND setup slot offsets and size attributes
 
-	currentSlot = ptrStartSlot - (szForExtraSlots == 0 ? 0 : 1);
+	currentSlot = ptrStartSlot;// - (szForExtraSlots == 0 ? 0 : 1);
 	shiftInIter = slotsToShiftFromPriorPage.begin();
 	shiftInMax = slotsToShiftFromPriorPage.end();
+	//void* whereToCopyData = (char*)_buffer + (*numSlots == startingFromSlotNumber ? (currentSlot + 1) : currentSlot)->_offRecord;
+	void* whereToCopyData = NULL;
+	if( *numSlots == 0 || startingFromSlotNumber == 0 )
+	{
+		whereToCopyData = _buffer;
+	}
+	else if( *numSlots == startingFromSlotNumber )
+	{
+		whereToCopyData =
+				(char*)_buffer + (currentSlot + 1 + numOfSlotsToBeErased)->_offRecord + (currentSlot + 1 + numOfSlotsToBeErased)->_szRecord;
+	}
+	else
+	{
+		whereToCopyData = (char*)_buffer + currentSlot->_offRecord;
+	}
 	for( ; shiftInIter != shiftInMax; shiftInIter++ )
 	{
 		//copy the data portion for this record
-		memcpy( startOfShifting, shiftInIter->first, shiftInIter->second );
+		memcpy( whereToCopyData, shiftInIter->first, shiftInIter->second );
 		//update slot information
 		currentSlot->_szRecord = shiftInIter->second;
-		currentSlot->_offRecord = (unsigned int)((char*)startOfShifting - (char*)_buffer);
+		currentSlot->_offRecord = (unsigned int)((char*)whereToCopyData - (char*)_buffer);
 		//update starting position of shift
-		startOfShifting = (char*)startOfShifting + shiftInIter->second;
+		whereToCopyData = (char*)whereToCopyData + shiftInIter->second;
 		//update current slot
 		currentSlot = currentSlot - 1;
 	}
 
 	//update the shifted slots' offsets (since they remained the same and now are incorrect)
-	PageDirSlot* updatedEndSlot = eraseSlotsTillThisOne - slotsToShiftFromPriorPage.size() - 1;
+	PageDirSlot* updatedEndSlot =
+			ptrEndOfDirSlot + numOfSlotsToBeErased - slotsToShiftFromPriorPage.size() - 1;
 	if( (char*)currentSlot > (char*)updatedEndSlot )
 	{
 		while( currentSlot != updatedEndSlot )
@@ -1843,7 +1866,7 @@ RC PFMExtension::shiftRecursivelyToEnd //NOT TESTED
 	//current       start   (keep in mind physical address of start is greater than of the current)
 
 	//number of extra slots
-	int numExtraSlots = ( (startOfDirSlot - currentSlot) - 1) - *numSlots;
+	int numExtraSlots = slotsToShiftFromPriorPage.size() - numOfSlotsToBeErased;
 
 	//update offset to a free space
 	//*ptrVarForFreeSpace =
@@ -3138,32 +3161,32 @@ RC MetaDataSortedEntries::splitBucket()
 			}
 
 			//debugging
-			if( maxPages == 4 && (slotNum == 202 || slotNum == 203 || slotNum == 204) )
-			{
-			//	std::cout << endl << "primary data file:" << endl;
-			//	printFile(_ixfilehandle->_primBucketDataFileHandler);
-			//	std::cout << endl << "overflow data file:" << endl;
-			//	printFile(_ixfilehandle->_overBucketDataFileHandler);
-	            unsigned int numberOfPagesFromFunction = 0;
-	        	// Get number of primary pages
-	            RC rc = IndexManager::instance()->getNumberOfPrimaryPages(*_ixfilehandle, numberOfPagesFromFunction);
-	            if(rc != 0)
-	            {
-	            	cout << "getNumberOfPrimaryPages() failed." << endl;
-	            	//indexManager->closeFile(ixfileHandle);
-	        		return -1;
-	            }
+			//if( maxPages == 4 && (slotNum == 202 || slotNum == 203 || slotNum == 204) )
+			//{
+			////	std::cout << endl << "primary data file:" << endl;
+			////	printFile(_ixfilehandle->_primBucketDataFileHandler);
+			////	std::cout << endl << "overflow data file:" << endl;
+			////	printFile(_ixfilehandle->_overBucketDataFileHandler);
+	        //    unsigned int numberOfPagesFromFunction = 0;
+	        //	// Get number of primary pages
+	        //    RC rc = IndexManager::instance()->getNumberOfPrimaryPages(*_ixfilehandle, numberOfPagesFromFunction);
+	        //    if(rc != 0)
+	        //    {
+	        //    	cout << "getNumberOfPrimaryPages() failed." << endl;
+	        //    	//indexManager->closeFile(ixfileHandle);
+	        //		return -1;
+	        //    }
 
-	        	// Print Entries in each page
-	        	for (unsigned i = 0; i < numberOfPagesFromFunction; i++) {
-	        		rc = IndexManager::instance()->printIndexEntriesInAPage(*_ixfilehandle, _attr, i);
-	        		if (rc != 0) {
-	                	cout << "printIndexEntriesInAPage() failed." << endl;
-	        			//indexManager->closeFile(ixfileHandle);
-	        			return -1;
-	        		}
-	        	}
-			}
+	        //	// Print Entries in each page
+	        //	for (unsigned i = 0; i < numberOfPagesFromFunction; i++) {
+	        //		rc = IndexManager::instance()->printIndexEntriesInAPage(*_ixfilehandle, _attr, i);
+	        //		if (rc != 0) {
+	        //        	cout << "printIndexEntriesInAPage() failed." << endl;
+	        //			//indexManager->closeFile(ixfileHandle);
+	        //			return -1;
+	        //		}
+	        //	}
+			//}
 
 			//update slot number
 			slotNum++;
@@ -3217,6 +3240,26 @@ RC MetaDataSortedEntries::mergeBuckets()
 	//[1,2,3,4,5,6] => [7,19,22,23,100] => [101,200]
 
 	BUCKET_NUMBER bktNumber[2] = {_bktNumber, _bktNumber + _ixfilehandle->N_Level()};
+
+	unsigned int numberOfPagesFromFunction = 0;
+	// Get number of primary pages
+	RC rc = IndexManager::instance()->getNumberOfPrimaryPages(*_ixfilehandle, numberOfPagesFromFunction);
+	if(rc != 0)
+	{
+		cout << "getNumberOfPrimaryPages() failed." << endl;
+		//indexManager->closeFile(ixfileHandle);
+		return -1;
+	}
+
+	// Print Entries in each page
+	for (unsigned i = 0; i < numberOfPagesFromFunction; i++) {
+		rc = IndexManager::instance()->printIndexEntriesInAPage(*_ixfilehandle, _attr, i);
+		if (rc != 0) {
+			cout << "printIndexEntriesInAPage() failed." << endl;
+			//indexManager->closeFile(ixfileHandle);
+			return -1;
+		}
+	}
 
 	//two buckets will be "controlled" by an individual PFMExtension component
 	PFMExtension* bucketController[2] = { NULL, NULL };
@@ -3326,7 +3369,36 @@ RC MetaDataSortedEntries::mergeBuckets()
 	{
 		if( (errCode = bucketController[0]->insertTuple( it->first, it->second, _bktNumber, pageNum, slotNum, newPage )) != 0 )
 		{
-			//current page is full, go to the next
+			IX_PrintError(errCode);
+			return errCode;
+		}
+
+							if( slotNum % 204 >= 202 && slotNum % 204 == 0 )
+							{
+								numberOfPagesFromFunction = 0;
+								// Get number of primary pages
+								RC rc = IndexManager::instance()->getNumberOfPrimaryPages(*_ixfilehandle, numberOfPagesFromFunction);
+								if(rc != 0)
+								{
+									cout << "getNumberOfPrimaryPages() failed." << endl;
+									//indexManager->closeFile(ixfileHandle);
+									return -1;
+								}
+
+								// Print Entries in each page
+								for (unsigned i = 0; i < numberOfPagesFromFunction; i++) {
+									rc = IndexManager::instance()->printIndexEntriesInAPage(*_ixfilehandle, _attr, i);
+									if (rc != 0) {
+										cout << "printIndexEntriesInAPage() failed." << endl;
+										//indexManager->closeFile(ixfileHandle);
+										return -1;
+									}
+								}
+							}
+
+		//current page is full, go to the next
+		if( newPage )
+		{
 			pageNum++;
 			slotNum = 0;
 
@@ -3339,10 +3411,6 @@ RC MetaDataSortedEntries::mergeBuckets()
 				free(tuples[1]);
 				return -51;	//PFME is buggy, since page is not full, but it is claimed to be full
 			}
-
-			//repeat the insertion
-			it--;
-			continue;
 		}
 
 		//increment to next slot

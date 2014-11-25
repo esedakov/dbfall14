@@ -68,18 +68,13 @@ int testCase_9(const string &indexFileName, const Attribute &attribute)
     {
         A[i] = i;
     }
-    random_shuffle(A, A+numOfTuples);	//for now
+    //random_shuffle(A, A+numOfTuples);	//for now
 
     for(int i = 0; i < numOfTuples; i++)
     {
         key = A[i];
         rid.pageNum = i+1;
         rid.slotNum = i+1;
-
-        if( i == 5907 || i == 5336 )
-        {
-        	cout << " i = " << i << endl;
-        }
 
         rc = indexManager->insertEntry(ixfileHandle, attribute, &key, rid);
         if(rc != success)
@@ -88,7 +83,6 @@ int testCase_9(const string &indexFileName, const Attribute &attribute)
         	indexManager->closeFile(ixfileHandle);
         	return fail;
         }
-
     }
 
 						unsigned int numberOfPagesFromFunction = 0;
@@ -147,7 +141,7 @@ int testCase_9(const string &indexFileName, const Attribute &attribute)
         	return fail;
         }
 
-						if( count % 10 == 0 )
+						/*if( count % 10 == 0 )
 						{
 							cout << endl;
 							numberOfPagesFromFunction = 0;
@@ -172,7 +166,7 @@ int testCase_9(const string &indexFileName, const Attribute &attribute)
 							cout << "end of printing" << endl;
 							cout << "===========================================================" << endl;
 							cout << "===========================================================" << endl;
-						}
+						}*/
 
         count++;
     }
