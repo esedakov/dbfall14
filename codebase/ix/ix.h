@@ -124,14 +124,15 @@ class IX_ScanIterator {
 
   RC getNextEntry(RID &rid, void *key);  		// Get next matching entry
   RC close();             						// Terminate index scan
-  bool reset();
+  void reset();
   bool isEntryAlreadyScanned(const void* entry, unsigned int entryLength);
   RC incrementToNext();
+  RC decrementToPrev();
   void resetToBucketStart(BUCKET_NUMBER bktNumber);
   void currentPosition(BUCKET_NUMBER& bkt, PageNum& page, unsigned int& slot);
   BUCKET_NUMBER _bkt;
-  PageNum _page;
-  unsigned int _slot;
+  int _page;
+  int _slot;
   std::vector< std::pair<void*, unsigned int> > _alreadyScanned;	//stores separately allocated entry buffers (not pointers)
   const void* _lowKey;		//NULL is -INF
   bool _lowKeyInclusive;
@@ -140,6 +141,7 @@ class IX_ScanIterator {
   IXFileHandle* _fileHandle;
   PFMExtension* _pfme;
   Attribute _attr;
+  bool _isReset;
 };
 
 
@@ -221,7 +223,8 @@ int estimateSizeOfEntry(const Attribute& attr, const void* entry);
 class MetaDataSortedEntries
 {
 public:
-	MetaDataSortedEntries(IXFileHandle& ixfilehandle, BUCKET_NUMBER bucket_number, const Attribute& attr, const void* key);
+	MetaDataSortedEntries(
+			IXFileHandle& ixfilehandle, BUCKET_NUMBER bucket_number, const Attribute& attr, const void* key);
 	~MetaDataSortedEntries();
 	RC insertEntry(const RID& rid);
 	RC searchEntry(RID& position, void* entry);

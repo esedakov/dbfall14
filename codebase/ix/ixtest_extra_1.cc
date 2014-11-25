@@ -76,11 +76,6 @@ int testCase_extra_1(const string &indexFileName, const Attribute &attribute)
         rid.pageNum = i;
         rid.slotNum = i;
 
-							if( i == 243 )
-							{
-								cout <<  " i =  " << i << endl;
-							}
-
         rc = indexManager->insertEntry(ixfileHandle, attribute, key, rid);
         if(rc != success)
         {
@@ -88,30 +83,6 @@ int testCase_extra_1(const string &indexFileName, const Attribute &attribute)
         	indexManager->closeFile(ixfileHandle);
         	return fail;
         }
-
-							if( i > 240 )
-							{
-								unsigned int numberOfPagesFromFunction = 0;
-								// Get number of primary pages
-								rc = indexManager->getNumberOfPrimaryPages(ixfileHandle, numberOfPagesFromFunction);
-								if(rc != 0)
-								{
-									cout << "getNumberOfPrimaryPages() failed." << endl;
-									//indexManager->closeFile(ixfileHandle);
-									return -1;
-								}
-
-								// Print Entries in each page
-								for (unsigned i = 0; i < numberOfPagesFromFunction; i++) {
-									rc = indexManager->printIndexEntriesInAPage(ixfileHandle, attribute, i);
-									if (rc != 0) {
-										cout << "printIndexEntriesInAPage() failed." << endl;
-										//indexManager->closeFile(ixfileHandle);
-										return -1;
-									}
-								}
-							}
-
     }
 
     //scan

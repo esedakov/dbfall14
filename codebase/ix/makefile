@@ -1,7 +1,7 @@
 
 include ../makefile.inc
 
-all: libix.a ixtest1 ixtest2 ixtest3 ixtest4a ixtest4b ixtest4c ixtest5 ixtest6 ixtest7 ixtest8 ixtest_extra_1 ixtest_extra_2 ixtest_extra_2a ixtest_extra_2b ixtest_extra_2c ixtest_extra_2d
+all: libix.a ixtest1 ixtest2 ixtest3 ixtest4a ixtest4b ixtest4c ixtest5 ixtest6 ixtest7 ixtest8 ixtest9 ixtest10 ixtest11 ixtest12 ixtest_extra_1 ixtest_extra_2 ixtest_extra_2a ixtest_extra_2b ixtest_extra_2c ixtest_extra_2d
 
 # lib file dependencies
 libix.a: libix.a(ix.o)  # and possibly other .o files
@@ -19,6 +19,10 @@ ixtest5.o: ixtest_util.h
 ixtest6.o: ixtest_util.h
 ixtest7.o: ixtest_util.h
 ixtest8.o: ixtest_util.h
+ixtest9.o: ixtest_util.h
+ixtest10.o: ixtest_util.h
+ixtest11.o: ixtest_util.h
+ixtest12.o: ixtest_util.h
 ixtest_extra_1.o: ixtest_util.h
 ixtest_extra_2.o: ixtest_util.h
 ixtest_extra_2a.o: ixtest_util.h
@@ -37,6 +41,10 @@ ixtest5: ixtest5.o libix.a $(CODEROOT)/rbf/librbf.a
 ixtest6: ixtest6.o libix.a $(CODEROOT)/rbf/librbf.a 
 ixtest7: ixtest7.o libix.a $(CODEROOT)/rbf/librbf.a 
 ixtest8: ixtest8.o libix.a $(CODEROOT)/rbf/librbf.a 
+ixtest9: ixtest9.o libix.a $(CODEROOT)/rbf/librbf.a
+ixtest10: ixtest10.o libix.a $(CODEROOT)/rbf/librbf.a
+ixtest11: ixtest11.o libix.a $(CODEROOT)/rbf/librbf.a
+ixtest12: ixtest12.o libix.a $(CODEROOT)/rbf/librbf.a
 ixtest_extra_1: ixtest_extra_1.o libix.a $(CODEROOT)/rbf/librbf.a 
 ixtest_extra_2: ixtest_extra_2.o libix.a $(CODEROOT)/rbf/librbf.a 
 ixtest_extra_2a: ixtest_extra_2a.o libix.a $(CODEROOT)/rbf/librbf.a 
@@ -51,5 +59,5 @@ $(CODEROOT)/rbf/librbf.a:
 
 .PHONY: clean
 clean:
-	-rm ixtest1 ixtest2 ixtest3 ixtest4a ixtest4b ixtest4c ixtest5 ixtest6 ixtest7 ixtest8 ixtest_extra_1 ixtest_extra_2 ixtest_extra_2a ixtest_extra_2b ixtest_extra_2c ixtest_extra_2d *.a *.o
+	-rm ixtest1 ixtest2 ixtest3 ixtest4a ixtest4b ixtest4c ixtest5 ixtest6 ixtest7 ixtest8 ixtest9 ixtest10 ixtest11 ixtest12 ixtest_extra_1 ixtest_extra_2 ixtest_extra_2a ixtest_extra_2b ixtest_extra_2c ixtest_extra_2d *.a *.o
 	$(MAKE) -C $(CODEROOT)/rbf clean

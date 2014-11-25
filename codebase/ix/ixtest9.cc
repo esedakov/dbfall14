@@ -68,18 +68,13 @@ int testCase_9(const string &indexFileName, const Attribute &attribute)
     {
         A[i] = i;
     }
-    random_shuffle(A, A+numOfTuples);	//for now
+    random_shuffle(A, A+numOfTuples);
 
     for(int i = 0; i < numOfTuples; i++)
     {
         key = A[i];
         rid.pageNum = i+1;
         rid.slotNum = i+1;
-
-        if( i == 5907 || i == 5336 )
-        {
-        	cout << " i = " << i << endl;
-        }
 
         rc = indexManager->insertEntry(ixfileHandle, attribute, &key, rid);
         if(rc != success)
@@ -88,28 +83,7 @@ int testCase_9(const string &indexFileName, const Attribute &attribute)
         	indexManager->closeFile(ixfileHandle);
         	return fail;
         }
-
     }
-
-						unsigned int numberOfPagesFromFunction = 0;
-						// Get number of primary pages
-						rc = indexManager->getNumberOfPrimaryPages(ixfileHandle, numberOfPagesFromFunction);
-						if(rc != 0)
-						{
-							cout << "getNumberOfPrimaryPages() failed." << endl;
-							//indexManager->closeFile(ixfileHandle);
-							return -1;
-						}
-
-						// Print Entries in each page
-						for (unsigned i = 0; i < numberOfPagesFromFunction; i++) {
-							rc = indexManager->printIndexEntriesInAPage(ixfileHandle, attribute, i);
-							if (rc != 0) {
-								cout << "printIndexEntriesInAPage() failed." << endl;
-								//indexManager->closeFile(ixfileHandle);
-								return -1;
-							}
-						}
 
     //scan
     compVal = 20000;
@@ -126,7 +100,6 @@ int testCase_9(const string &indexFileName, const Attribute &attribute)
     }
 
     // Test DeleteEntry in IndexScan Iterator
-    					vector<int> buffer;
     count = 0;
     while(ix_ScanIterator.getNextEntry(rid, &key) == success)
     {
@@ -134,11 +107,6 @@ int testCase_9(const string &indexFileName, const Attribute &attribute)
             cout << rid.pageNum << " " << rid.slotNum << endl;
 
         key = A[rid.pageNum-1];
-
-        				cout << key << " , ";
-
-        				buffer.push_back(key);
-
         rc = indexManager->deleteEntry(ixfileHandle, attribute, &key, rid);
         if(rc != success)
         {
@@ -146,65 +114,8 @@ int testCase_9(const string &indexFileName, const Attribute &attribute)
         	ix_ScanIterator.close();
         	return fail;
         }
-
-						if( count % 10 == 0 )
-						{
-							cout << endl;
-							numberOfPagesFromFunction = 0;
-							// Get number of primary pages
-							rc = indexManager->getNumberOfPrimaryPages(ixfileHandle, numberOfPagesFromFunction);
-							if(rc != 0)
-							{
-								cout << "getNumberOfPrimaryPages() failed." << endl;
-								//indexManager->closeFile(ixfileHandle);
-								return -1;
-							}
-
-							// Print Entries in each page
-							for (unsigned i = 0; i < numberOfPagesFromFunction; i++) {
-								rc = indexManager->printIndexEntriesInAPage(ixfileHandle, attribute, i);
-								if (rc != 0) {
-									cout << "printIndexEntriesInAPage() failed." << endl;
-									//indexManager->closeFile(ixfileHandle);
-									return -1;
-								}
-							}
-							cout << "end of printing" << endl;
-							cout << "===========================================================" << endl;
-							cout << "===========================================================" << endl;
-						}
-
         count++;
     }
-
-    					cout << "entries deleted=============================>" << endl;
-    					vector<int>::iterator vit = buffer.begin(), vmax = buffer.end();
-    					for( ; vit != vmax; vit++ )
-    					{
-    						cout << "[ " << *vit << " ]";
-    					}
-    					cout << "======================>end of deleted section" << endl;
-
-						numberOfPagesFromFunction = 0;
-						// Get number of primary pages
-						rc = indexManager->getNumberOfPrimaryPages(ixfileHandle, numberOfPagesFromFunction);
-						if(rc != 0)
-						{
-							cout << "getNumberOfPrimaryPages() failed." << endl;
-							//indexManager->closeFile(ixfileHandle);
-							return -1;
-						}
-
-						// Print Entries in each page
-						for (unsigned i = 0; i < numberOfPagesFromFunction; i++) {
-							rc = indexManager->printIndexEntriesInAPage(ixfileHandle, attribute, i);
-							if (rc != 0) {
-								cout << "printIndexEntriesInAPage() failed." << endl;
-								//indexManager->closeFile(ixfileHandle);
-								return -1;
-							}
-						}
-
     cout << "Number of deleted entries: " << count << endl;
     if (count != 20001)
     {
@@ -232,7 +143,7 @@ int testCase_9(const string &indexFileName, const Attribute &attribute)
     {
         B[i] = 30000+i;
     }
-    //random_shuffle(B, B+numOfTuples);	//for now
+    random_shuffle(B, B+numOfTuples);
 
     for(int i = 0; i < numOfTuples; i++)
     {
@@ -249,26 +160,6 @@ int testCase_9(const string &indexFileName, const Attribute &attribute)
         }
     }
 
-						numberOfPagesFromFunction = 0;
-						// Get number of primary pages
-						rc = indexManager->getNumberOfPrimaryPages(ixfileHandle, numberOfPagesFromFunction);
-						if(rc != 0)
-						{
-							cout << "getNumberOfPrimaryPages() failed." << endl;
-							//indexManager->closeFile(ixfileHandle);
-							return -1;
-						}
-
-						// Print Entries in each page
-						for (unsigned i = 0; i < numberOfPagesFromFunction; i++) {
-							rc = indexManager->printIndexEntriesInAPage(ixfileHandle, attribute, i);
-							if (rc != 0) {
-								cout << "printIndexEntriesInAPage() failed." << endl;
-								//indexManager->closeFile(ixfileHandle);
-								return -1;
-							}
-						}
-
     //scan
     compVal = 35000;
     rc = indexManager->scan(ixfileHandle, attribute, NULL, &compVal, true, true, ix_ScanIterator);
@@ -283,15 +174,11 @@ int testCase_9(const string &indexFileName, const Attribute &attribute)
     	return fail;
     }
 
-    					buffer.clear();
-
     count = 0;
     while(ix_ScanIterator.getNextEntry(rid, &key) == success)
     {
         if (count % 1000 == 0)
             cout << rid.pageNum << " " << rid.slotNum << endl;
-
-        				buffer.push_back(key);
 
         if(rid.pageNum > 30000 && B[rid.pageNum-30001] > 35000)
         {
@@ -301,37 +188,6 @@ int testCase_9(const string &indexFileName, const Attribute &attribute)
         }
         count ++;
     }
-
-							cout << "entries deleted=============================>" << endl;
-							vit = buffer.begin();
-							vmax = buffer.end();
-							for( ; vit != vmax; vit++ )
-							{
-								cout << "[ " << *vit << " ]";
-							}
-							cout << "======================>end of deleted section" << endl;
-
-							numberOfPagesFromFunction = 0;
-							// Get number of primary pages
-							rc = indexManager->getNumberOfPrimaryPages(ixfileHandle, numberOfPagesFromFunction);
-							if(rc != 0)
-							{
-								cout << "getNumberOfPrimaryPages() failed." << endl;
-								//indexManager->closeFile(ixfileHandle);
-								return -1;
-							}
-
-							// Print Entries in each page
-							for (unsigned i = 0; i < numberOfPagesFromFunction; i++) {
-								rc = indexManager->printIndexEntriesInAPage(ixfileHandle, attribute, i);
-								if (rc != 0) {
-									cout << "printIndexEntriesInAPage() failed." << endl;
-									//indexManager->closeFile(ixfileHandle);
-									return -1;
-								}
-							}
-
-
     cout << "Number of scanned entries: " << count << endl;
 
     //close scan

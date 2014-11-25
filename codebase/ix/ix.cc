@@ -20,6 +20,7 @@
  * -50 = key was not found
  * -51 = cannot shift from one page more data than can fit inside the next page
  * -52 = attempting to close iterator for more than once
+ * -53 = iterator could not go to the previous bucket without bucket merge operatio
  */
 
 IndexManager* IndexManager::_index_manager = 0;
@@ -650,6 +651,7 @@ RC IndexManager::scan(IXFileHandle &ixfileHandle,
 {
 	ix_ScanIterator.reset();
 	//memcpy(&ix_ScanIterator._attr, &attribute, sizeof(Attribute));
+	ix_ScanIterator._isReset = false;
 	ix_ScanIterator._attr.length = attribute.length;
 	ix_ScanIterator._attr.name = attribute.name;
 	ix_ScanIterator._attr.type = attribute.type;
@@ -671,12 +673,11 @@ void IX_ScanIterator::currentPosition(BUCKET_NUMBER& bkt, PageNum& page, unsigne
 	slot = _slot;
 }
 
-bool IX_ScanIterator::reset()
+void IX_ScanIterator::reset()
 {
-	bool ret = false;
-	if( _pfme != NULL)
+	if( _isReset == false )
 	{
-		ret = true;
+		_isReset = true;
 		_bkt = 0;
 		_page = 0;
 		_slot = 0;
@@ -707,13 +708,12 @@ bool IX_ScanIterator::reset()
 			}
 		}
 	}
-	return ret;
 }
 
 IX_ScanIterator::IX_ScanIterator()
 :  _bkt(0), _page(0), _slot(0), _alreadyScanned(std::vector< std::pair<void*, unsigned int> >()),
   _lowKey(NULL), _lowKeyInclusive(false), _highKey(NULL), _highKeyInclusive(false), _fileHandle(NULL),
-  _pfme(NULL)
+  _pfme(NULL), _isReset(true)
 {
 }
 
@@ -745,6 +745,15 @@ RC IX_ScanIterator::getNextEntry(RID &rid, void *key)
 {
 	RC errCode = 0;
 
+	if( _bkt == 85 && _page == 0 )
+	{
+		cout << "bucket = " << _bkt << ", page = " << _page << ", slot = " << _slot;
+	}
+	else if( _bkt == 85 && _page == 1 )
+	{
+		cout << "bucket = " << _bkt << ", page = " << _page << ", slot = " << _slot;
+	}
+
 	//check if scan is over or not (i.e. if maximum number of buckets has been reached)
 	unsigned int numBuckets = 0;
 	if( (errCode = IndexManager::instance()->getNumberOfPrimaryPages(*_fileHandle, numBuckets)) != 0 )
@@ -755,6 +764,10 @@ RC IX_ScanIterator::getNextEntry(RID &rid, void *key)
 	{
 		return IX_EOF;
 	}
+
+	//reload PFME (not a bug, do not remove)
+	free(_pfme);
+	_pfme = new PFMExtension(*_fileHandle, _bkt);
 
 	//iterate over the buckets, until the entry is found
 	for( ; _bkt < numBuckets; _bkt++ )
@@ -767,7 +780,7 @@ RC IX_ScanIterator::getNextEntry(RID &rid, void *key)
 		}
 
 		//iterate over the pages of the current bucket
-		for( ; _page < maxPages; _page++ )
+		for( ; _page < (int)maxPages; _page++ )
 		{
 			//determine number of slots in the current page
 			unsigned int maxSlots = 0;
@@ -777,7 +790,7 @@ RC IX_ScanIterator::getNextEntry(RID &rid, void *key)
 			}
 
 			//iterate over the slots
-			for( ; _slot < maxSlots; _slot++ )
+			for( ; _slot < (int)maxSlots; _slot++ )
 			{
 				//buffer for keeping the current entry
 				void* entry = malloc(PAGE_SIZE);
@@ -792,6 +805,11 @@ RC IX_ScanIterator::getNextEntry(RID &rid, void *key)
 
 					//quit the inner loop and let the outer to decide whether to continue or not, depending if there are more pages left
 					break;
+				}
+
+				if( _attr.type == TypeReal )
+				{
+					cout << "key = " << ((float*)entry)[0] << endl;
 				}
 
 				//estimate size of entry
@@ -864,9 +882,47 @@ RC IX_ScanIterator::getNextEntry(RID &rid, void *key)
 	return IX_EOF;
 }
 
+RC IX_ScanIterator::decrementToPrev()
+{
+	RC errCode = 0;
+
+	//reload PFME (not a bug, do not remove)
+	free(_pfme);
+	_pfme = new PFMExtension(*_fileHandle, _bkt);
+
+	_slot--;
+	//	3.1 if previous slot is not in this page  => increment to next page (set slot = 0)
+	if( _slot < 0 )
+	{
+		_page--;
+	}
+	//check if page has a legal value
+	if( _page < 0 )
+	{
+		return -53;	//iterator cannot go back to the previous bucket without bucket merge operation
+	}
+
+	//now when we know that page has a legal value (in case it was reset), go for an reset slot
+	if( _slot < 0 )
+	{
+		unsigned int numEntries = 0;
+		if( (errCode = _pfme->getNumberOfEntriesInPage(_bkt, _page, numEntries)) != 0 )
+		{
+			return errCode;
+		}
+		_slot = numEntries - 1;
+	}
+
+	return errCode;
+}
+
 RC IX_ScanIterator::incrementToNext()
 {
 	RC errCode = 0;
+
+	//reload PFME (not a bug, do not remove)
+	free(_pfme);
+	_pfme = new PFMExtension(*_fileHandle, _bkt);
 
 	_slot++;
 	//	3.1 if next slot does not exist in the given page => increment to next page (set slot = 0)
@@ -875,7 +931,7 @@ RC IX_ScanIterator::incrementToNext()
 	{
 		return errCode;
 	}
-	if( _slot >= numEntries )
+	if( _slot >= (int)numEntries )
 	{
 		_page++;
 		_slot = 0;
@@ -887,7 +943,7 @@ RC IX_ScanIterator::incrementToNext()
 	{
 		return errCode;
 	}
-	if( _page >= numPages )
+	if( _page >= (int)numPages )
 	{
 		_page = 0;
 		_slot = 0;
@@ -907,8 +963,7 @@ void IX_ScanIterator::resetToBucketStart(BUCKET_NUMBER bkt)
 
 RC IX_ScanIterator::close()
 {
-	if( reset() == false )
-		return -52;	//attempting to close iterator for more than once
+	reset();
 	return 0;
 }
 
@@ -1085,6 +1140,9 @@ void IX_PrintError (RC rc)
 		break;
 	case -52:
 		errMsg = "attempting to close iterator for more than once";
+		break;
+	case -53:
+		errMsg = "iterator cannot go back to the previous bucket without bucket merge operation";
 		break;
 	}
 	//print message
@@ -2941,7 +2999,23 @@ RC MetaDataSortedEntries::deleteEntry(const RID& rid)
 		return -43;
 	}
 
-	//if currently removed element is also pointed by a scanning iterator then make sure that iterator is incremented to the next position
+	//if an item is deleted and it has already been scanned (i.e. it is positioned to the left of scanning marker) then
+	//after deletion all items after deleted item are shifted to the left. That creates a problem for scanning iterator
+	//since it now points at the next item, rather than the one that it would scan under normal considerations
+	//[a][b][c][d][e]...
+	// X     ^
+	// |     |
+	// |     iterator points at item 'c'
+	// |
+	// item 'a' is to be deleted before getNextEntry is going to be called
+	//so, after deletion
+	//[b][c][d][e]...
+	//       ^
+	//       |
+	//       iterator did not change its position, but because of deletion it now points at the next item 'd' rather than 'c'
+	//so, iterator essentially skipped 'c'!
+	//So whenever, item deleted is to the left of scanning position (current marker) then after deletion, decrease scanning
+	//position by number of deleted items (if 1 item is deleted, then decrease by
 	std::vector<IX_ScanIterator*>::iterator
 		l = IndexManager::instance()->_iterators.begin(),
 		lmax = IndexManager::instance()->_iterators.end();
@@ -2951,9 +3025,9 @@ RC MetaDataSortedEntries::deleteEntry(const RID& rid)
 		PageNum itPage = 0;
 		unsigned int itSlot = 0;
 		(*l)->currentPosition(itBucket, itPage, itSlot);
-		if( itPage == position.pageNum && itSlot == position.slotNum && itBucket == _bktNumber )
+		if( itPage == position.pageNum && itBucket == _bktNumber && itSlot > position.slotNum )
 		{
-			if( (errCode = (*l)->incrementToNext()) != 0 )
+			if( (errCode = (*l)->decrementToPrev()) != 0 )
 			{
 				free(entry);
 				return errCode;
