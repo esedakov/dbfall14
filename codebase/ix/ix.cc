@@ -2269,14 +2269,69 @@ RC MetaDataSortedEntries::searchEntry(RID& position, void* entry)
 }
 
 //pageNumber is virtual
-int MetaDataSortedEntries::searchEntryInPage(RID& result, const PageNum& pageNumber, const int indexStart, const int indexEnd)
+int MetaDataSortedEntries::searchEntryInPage(RID& result, const PageNum& pageNumber, const int indexStart, const int indexEnd, bool& isBounding)
+//isBounding should then tell the upper level page-searcher whether to continue (if isBounding is false) or stop (if isBounding is true)
 {
+	RC errCode = 0;
 	//binary search algorithm adopted from: Data Abstraction and Problem Solving with C++ (published 2005) by Frank Carrano, page 87
 
 	if( indexStart > indexEnd )
 	{
 		result.pageNum = pageNumber;
 		result.slotNum = indexStart == 0 ? indexStart : indexEnd;
+		//return indexStart == 0 ? -1 : 1;	//-1 means looking for item less than those presented in this page
+											//+1 means looking for item greater than those presented in this page
+
+		//if we are on the edge (indexStart = 0 or indexEnd = numEntries - 1), then
+		//need to determine if neighboring items are bounding the key or not
+
+		//determine number of entries in the given page
+		unsigned int numEntries = 0;
+		if( (errCode = pfme->getNumberOfEntriesInPage(_bktNumber, pageNumber, numEntries)) != 0 )
+		{
+			IX_PrintError(errCode);
+			exit(errCode);
+		}
+
+		//now check if this is edge-case
+		if( numEntries > 0 && (indexStart == 0 || indexEnd == ((int)numEntries - 1)) )
+		{
+			int position = (indexStart == 0 ? 0 : numEntries - 1);
+			//if it is, then determine the value of the key at the edge (position 0 or numEntries-1, depending where you landed)
+			//allocate buffer for storing the retrieved entry
+			void* edgeKey = malloc(PAGE_SIZE);
+			memset(edgeKey, 0, PAGE_SIZE);
+
+			//retrieve middle value
+			if( (errCode = pfme->getTuple(edgeKey, _bktNumber, pageNumber, position)) != 0 )
+			{
+				free(edgeKey);
+				exit(errCode);
+			}
+
+			//perform comparison
+			int cmp = compareEntryKeyToClassKey(edgeKey);
+
+			isBounding = false;
+
+			//if indexStart == 0, then check if edgeKey <= ourItemKey
+			if( position == 0 )
+			{
+				isBounding = cmp >= 0;	//_key >= edgeKey
+			}
+			//if indexEnd == numEntries-1, then check if edgeKey >= outItemKey
+			else
+			{
+				isBounding = cmp <= 0;
+			}
+
+			free(edgeKey);
+		}
+		else
+		{
+			isBounding = true;
+		}
+
 		return indexStart == 0 ? -1 : 1;	//-1 means looking for item less than those presented in this page
 											//+1 means looking for item greater than those presented in this page
 	}
@@ -2287,13 +2342,12 @@ int MetaDataSortedEntries::searchEntryInPage(RID& result, const PageNum& pageNum
 	void* midValue = malloc(PAGE_SIZE);
 	memset(midValue, 0, PAGE_SIZE);
 
-	RC errCode = 0;
 
 	//retrieve middle value
 	if( (errCode = pfme->getTuple(midValue, _bktNumber, pageNumber, middle)) != 0 )
 	{
 		free(midValue);
-		return errCode;
+		exit(errCode);
 	}
 
 	//perform comparison
@@ -2304,17 +2358,20 @@ int MetaDataSortedEntries::searchEntryInPage(RID& result, const PageNum& pageNum
 	{
 		result.pageNum = (PageNum)pageNumber;
 		result.slotNum = middle;
+		isBounding = true;
 	}
 	//else if( _key < midValue )
 	else if( comp_res < 0 )
 	{
 		free(midValue);
-		return searchEntryInPage(result, pageNumber, indexStart, middle - 1);
+		isBounding = false;
+		return searchEntryInPage(result, pageNumber, indexStart, middle - 1, isBounding);
 	}
 	else
 	{
 		free(midValue);
-		return searchEntryInPage(result, pageNumber, middle + 1, indexEnd);
+		isBounding = false;
+		return searchEntryInPage(result, pageNumber, middle + 1, indexEnd, isBounding);
 	}
 
 	//deallocate buffer for holding middle value
@@ -2349,8 +2406,10 @@ bool MetaDataSortedEntries::searchEntryInArrayOfPages(RID& position, const int s
 		exit(errCode);
 	}
 
+	bool isBounding = false;
+
 	//determine if the requested key is inside this page
-	int result = searchEntryInPage(position, middlePageNumber, 0, numEntries - 1);
+	int result = searchEntryInPage(position, middlePageNumber, 0, numEntries - 1, isBounding);
 
 	//if it is inside this page, then return success
 	if( result == 0 )
@@ -2358,19 +2417,27 @@ bool MetaDataSortedEntries::searchEntryInArrayOfPages(RID& position, const int s
 		//match is found
 		success_flag = true;
 	}
-	else if( result < 0 )
-	{
-		//if keys inside this page are too high, then check pages to the left
-		//keep in mind that checking is not linear, but instead a current range
-		//[start, end] is divided into a half [start, middle - 1] and then
-		//this function is called recursively on this range of pages
-		return searchEntryInArrayOfPages(position, startPageNumber, middlePageNumber - 1);
-	}
 	else
 	{
-		//if keys inside this page are too low, then check pages to the right
-		//similar idea is used over here, except new range is [middle + 1, end]
-		return searchEntryInArrayOfPages(position, middlePageNumber + 1, endPageNumber);
+		if( isBounding )
+		{
+			//match is not found, but may be it is not required by the upper level function (in case this is an insert command)
+			success_flag = false;
+		}
+		else if( result < 0 )
+		{
+			//if keys inside this page are too high, then check pages to the left
+			//keep in mind that checking is not linear, but instead a current range
+			//[start, end] is divided into a half [start, middle - 1] and then
+			//this function is called recursively on this range of pages
+			return searchEntryInArrayOfPages(position, startPageNumber, middlePageNumber - 1);
+		}
+		else
+		{
+			//if keys inside this page are too low, then check pages to the right
+			//similar idea is used over here, except new range is [middle + 1, end]
+			return searchEntryInArrayOfPages(position, middlePageNumber + 1, endPageNumber);
+		}
 	}
 
 	//success

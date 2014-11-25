@@ -227,7 +227,7 @@ public:
 	RC searchEntry(RID& position, void* entry);
 	RC deleteEntry(const RID& rid);
 protected:
-	int searchEntryInPage(RID& result, const PageNum& pageNumber, const int indexStart, const int indexEnd);
+	int searchEntryInPage(RID& result, const PageNum& pageNumber, const int indexStart, const int indexEnd, bool& isBounding);
 	bool searchEntryInArrayOfPages(RID& position, const int start, const int end);
 	//RC getPage();	//replaced by equivalent in the PFME
 	//RC translateToPageNumber(const PageNum& pagenumber, PageNum& result);	//exists in PFME
