@@ -56,19 +56,11 @@ int testCase_4A(const string &indexFileName, const Attribute &attribute)
     }
 
     // insert entry
-    map<int, RID> buf0;
     for(unsigned i = 0; i <= numOfTuples; i++)
     {
-    	//added by me
-    	if( i + 1 == 819 )
-    	{
-    		cout << "i = " << i << endl;
-    	}
-
         key = i+1; //just in case somebody starts pageNum and recordId from 1
         rid.pageNum = key;
         rid.slotNum = key+1;
-        buf0.insert(std::pair<int, RID>(key, rid));
 
         rc = indexManager->insertEntry(ixfileHandle, attribute, &key, rid);
         if(rc != success)
@@ -79,38 +71,6 @@ int testCase_4A(const string &indexFileName, const Attribute &attribute)
         }
         inRidPageNumSum += rid.pageNum;
     }
-
-    cout << "size = " << buf0.size() << endl;
-    map<int, RID>::iterator k = buf0.begin(), kmax = buf0.end();
-    int ki = 0;
-    for( ; k!=kmax; k++, ki++ )
-    {
-    	cout << "[ " << k->first << " ]";
-    	if( ki % 500 == 0 && ki > 0 )
-    	{
-    		cout << endl;
-    	}
-    }
-
-    unsigned int numberOfPagesFromFunction = 0;
-	// Get number of primary pages
-    rc = indexManager->getNumberOfPrimaryPages(ixfileHandle, numberOfPagesFromFunction);
-    if(rc != success)
-    {
-    	cout << "getNumberOfPrimaryPages() failed." << endl;
-    	indexManager->closeFile(ixfileHandle);
-		return fail;
-    }
-
-	// Print Entries in each page
-	for (unsigned i = 0; i < numberOfPagesFromFunction; i++) {
-		rc = indexManager->printIndexEntriesInAPage(ixfileHandle, attribute, i);
-		if (rc != success) {
-        	cout << "printIndexEntriesInAPage() failed." << endl;
-			indexManager->closeFile(ixfileHandle);
-			return fail;
-		}
-	}
 
     // Scan
     rc = indexManager->scan(ixfileHandle, attribute, NULL, NULL, true, true, ix_ScanIterator);
@@ -125,25 +85,12 @@ int testCase_4A(const string &indexFileName, const Attribute &attribute)
     	return fail;
     }
 
-    map<int, RID> buf;
     while(ix_ScanIterator.getNextEntry(rid, &key) == success)
     {
     	if (rid.pageNum % 200 == 0) {
         	cout << "returned rid: " << rid.pageNum << " " << rid.slotNum << endl;
     	}
         outRidPageNumSum += rid.pageNum;
-        buf.insert(std::pair<int, RID>(rid.pageNum, rid));
-    }
-
-    cout << "size = " << buf.size() << endl;
-    map<int, RID>::iterator j = buf.begin(), jmax = buf.end();
-    for( ki = 0; j!=jmax; j++, ki++ )
-    {
-    	cout << "[ " << j->first << " ]";
-    	if( ki % 500 == 0 && ki > 0 )
-		{
-			cout << endl;
-		}
     }
 
     if (inRidPageNumSum != outRidPageNumSum)

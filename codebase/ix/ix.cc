@@ -788,10 +788,10 @@ RC IX_ScanIterator::getNextEntry(RID &rid, void *key)
 			continue;
 		}
 
-		if( _attr.type == TypeReal )
-		{
-			cout << "key = " << ((float*)entry)[0] << ", bkt = " << _bkt << ", page = " << _page << ", slot = " << _slot << endl;
-		}
+		//if( _attr.type == TypeReal )
+		//{
+		//	cout << "key = " << ((float*)entry)[0] << ", bkt = " << _bkt << ", page = " << _page << ", slot = " << _slot << endl;
+		//}
 
 		//estimate size of entry
 		int entryLength = estimateSizeOfEntry(_attr, entry);
@@ -1836,11 +1836,6 @@ RC PFMExtension::shiftRecursivelyToEnd //NOT TESTED
 
 	//find out number of directory slots
 	unsigned int* numSlots = ((unsigned int*)startOfDirSlot);
-
-	if( *numSlots == 204 )
-	{
-		cout << "numSlots = " << *numSlots << endl;
-	}
 
 	//check if rid is correct in terms of indexed slot
 	if( startingFromSlotNumber > *numSlots )
@@ -3311,12 +3306,6 @@ RC MetaDataSortedEntries::splitBucket()
 
 	BUCKET_NUMBER bktNumber[2] = {_bktNumber, _bktNumber + _ixfilehandle->N_Level()};
 
-	cout << "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!" << endl;
-	cout << "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!" << endl;
-	cout << "MERGING BUCKETS " << bktNumber[0] << " with " << bktNumber[1] << endl;
-	cout << "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!" << endl;
-	cout << "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!" << endl;
-
 	//add page for primary bucket, providing that the file does not have one already
 	if( _ixfilehandle->_primBucketDataFileHandler._info->_numPages < bktNumber[1] + 2 )
 	{
@@ -3524,8 +3513,6 @@ RC MetaDataSortedEntries::mergeBuckets()
 		//return -54;
 	}
 
-	cout << "MERGING BUCKETS " << bktNumber[0] << " with " << bktNumber[1] << endl;
-
 	std::map< IX_ScanIterator*, std::vector< std::pair<void*, unsigned int> > > mergingIterList;
 
 	//setup merging iterator list
@@ -3658,19 +3645,6 @@ RC MetaDataSortedEntries::mergeBuckets()
 		//insert buffer into output vector
 		output.push_back( std::pair<void*, unsigned int>(buf, sz_of_buf) );
 
-		if(_attr.type == TypeReal )
-		{
-			cout << ((float*)buf)[0];
-			if( output.size() % 50 == 0 && output.size() > 0 )
-				cout << endl;
-			else
-				cout << " , ";
-			//if( (int)((float*)buf)[0] == 13821 )
-			//{
-			//	cout << "disaster happens here";
-			//}
-		}
-
 		//not a bug: do not deallocate buffer 'buf'
 
 		//update slot number for which item was selected
@@ -3793,11 +3767,6 @@ RC MetaDataSortedEntries::mergeBuckets()
 				free(tuples[1]);
 				return -51;	//PFME is buggy, since page is not full, but it is claimed to be full
 			}
-		}
-
-		if( slotNum == 0 && pageNum == 1 && _bktNumber == 63 && ((unsigned int*)it->first)[1] == 4122 )
-		{
-			cout << "got here, float = " << ( (float*)it->first )[0] << endl;
 		}
 
 		//now since we know that the page has enough of space, go on and insert a new item

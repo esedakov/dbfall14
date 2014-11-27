@@ -63,9 +63,9 @@ int testCase_2(const string &indexFileName, const Attribute &attribute)
         indexManager->closeFile(ixfileHandle);
         return fail;
     }
-
+	
 	cout << endl << "Before Insert - readPageCount:" << readPageCount << " writePageCount:" << writePageCount << " appendPageCount:" << appendPageCount << endl;
-
+	
     // insert entry
     for(unsigned i = 0; i < numOfTuples; i++)
     {
@@ -91,16 +91,16 @@ int testCase_2(const string &indexFileName, const Attribute &attribute)
 	readDiff = readPageCount1 - readPageCount;
 	writeDiff = writePageCount1 - writePageCount;
 	appendDiff = appendPageCount1 - appendPageCount;
-
+	
 	cout << "Page I/O count of single insertion - readPage:" << readDiff << " writePageCount:" << writeDiff << " appendPage:" << appendDiff << endl;
-
+	
 	if (readDiff == 0 && writeDiff == 0 && appendDiff == 0) {
 		cout << "Insertion should generate some page I/O. The implementation is not correct." << endl;
-        indexManager->closeFile(ixfileHandle);
+        indexManager->closeFile(ixfileHandle);		
 		return fail;
-	}
-
-
+	} 
+	
+	
 	// collect counters
 	rc = ixfileHandle.collectCounterValues(readPageCount, writePageCount, appendPageCount);
 	if(rc != success)
@@ -110,7 +110,7 @@ int testCase_2(const string &indexFileName, const Attribute &attribute)
         return fail;
     }
 	cout << endl << "Before scan - readPageCount:" << readPageCount << " writePageCount:" << writePageCount << " appendPageCount:" << appendPageCount << endl;
-
+	
 	// Conduct a scan
 	rc = indexManager->scan(ixfileHandle, attribute, NULL, NULL, true, true, ix_ScanIterator);
     if(rc == success)
@@ -139,19 +139,19 @@ int testCase_2(const string &indexFileName, const Attribute &attribute)
         return fail;
     }
 	cout << "After scan - readPageCount:" << readPageCount1 << " writePageCount:" << writePageCount1 << " appendPageCount:" << appendPageCount1 << endl;
-
+	
 	readDiff = readPageCount1 - readPageCount;
 	writeDiff = writePageCount1 - writePageCount;
 	appendDiff = appendPageCount1 - appendPageCount;
-
+	
 	cout << "Page I/O count of scan - readPage:" << readDiff << " writePageCount:" << writeDiff << " appendPage:" << appendDiff << endl;
-
+	
 	if (readDiff == 0 && writeDiff == 0 && appendDiff == 0) {
 		cout << "Scan should generate some page I/O. The implementation is not correct." << endl;
-        indexManager->closeFile(ixfileHandle);
+        indexManager->closeFile(ixfileHandle);		
 		return fail;
-	}
-
+	} 
+	
 	// collect counters
 	rc = ixfileHandle.collectCounterValues(readPageCount, writePageCount, appendPageCount);
 	if(rc != success)
@@ -161,7 +161,7 @@ int testCase_2(const string &indexFileName, const Attribute &attribute)
         return fail;
     }
 	cout << endl << "Before Delete - readPageCount:" << readPageCount << " writePageCount:" << writePageCount << " appendPageCount:" << appendPageCount << endl;
-
+	
     // delete entry
     rc = indexManager->deleteEntry(ixfileHandle, attribute, &age, rid);
     if(rc != success)
@@ -186,12 +186,12 @@ int testCase_2(const string &indexFileName, const Attribute &attribute)
 	appendDiff = appendPageCount1 - appendPageCount;
 
 	cout << "Page I/O count of single delete - readPage:" << readDiff << " writePageCount:" << writeDiff << " appendPage:" << appendDiff << endl << endl;
-
+	
 	if (readDiff == 0 && writeDiff == 0 && appendDiff == 0) {
 		cout << "Deletion should generate some page I/O. The implementation is not correct." << endl;
-        indexManager->closeFile(ixfileHandle);
+        indexManager->closeFile(ixfileHandle);		
 		return fail;
-	}
+	} 
 
     // delete entry again
     rc = indexManager->deleteEntry(ixfileHandle, attribute, &age, rid);
