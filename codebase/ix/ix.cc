@@ -20,7 +20,8 @@
  * -50 = key was not found
  * -51 = cannot shift from one page more data than can fit inside the next page
  * -52 = attempting to close iterator for more than once
- * -53 = iterator could not go to the previous bucket without bucket merge operatio
+ * -53 = iterator could not go to the previous bucket without bucket merge operation
+ * -54 = attempting to merge existing and non-existing buckets
  */
 
 IndexManager* IndexManager::_index_manager = 0;
@@ -518,7 +519,7 @@ RC IndexManager::insertEntry(IXFileHandle &ixfileHandle, const Attribute &attrib
 	//hashed key
 	unsigned int hkey = hash_at_specified_level(ixfileHandle._info->N, ixfileHandle._info->Level, general_hash);
 
-	if( hkey < ixfileHandle._info->Next )
+	if( hkey < (unsigned int)ixfileHandle._info->Next )
 	{
 		hkey = hash_at_specified_level(ixfileHandle._info->N, ixfileHandle._info->Level + 1, general_hash);
 	}
@@ -546,7 +547,7 @@ RC IndexManager::deleteEntry(IXFileHandle &ixfileHandle, const Attribute &attrib
 	//hashed key
 	unsigned int hkey = hash_at_specified_level(ixfileHandle._info->N, ixfileHandle._info->Level, general_hash);
 
-	if( hkey < ixfileHandle._info->Next )
+	if( hkey < (unsigned int)ixfileHandle._info->Next )
 	{
 		hkey = hash_at_specified_level(ixfileHandle._info->N, ixfileHandle._info->Level + 1, general_hash);
 	}
@@ -679,6 +680,7 @@ void IX_ScanIterator::reset()
 	{
 		_isReset = true;
 		_bkt = 0;
+		_maxBucket = 0;
 		_page = 0;
 		_slot = 0;
 		_lowKey = NULL;
@@ -688,15 +690,26 @@ void IX_ScanIterator::reset()
 		_fileHandle = NULL;
 		free(_pfme);
 		_pfme = NULL;
-		std::vector< std::pair<void*, unsigned int> >::iterator it = _alreadyScanned.begin(), imax = _alreadyScanned.end();
-		for( ; it != imax; it++ )
+		//std::vector< std::pair<void*, unsigned int> >::iterator it = _alreadyScanned.begin(), imax = _alreadyScanned.end();
+		//for( ; it != imax; it++ )
+		//{
+		//	free(it->first);
+		//}
+		std::map< BUCKET_NUMBER, std::vector< std::pair< void*, unsigned int > > >::iterator
+			it = _mergingItems.begin(), it_max = _mergingItems.end();
+		for( ; it != it_max; it++ )
 		{
-			free(it->first);
+			vector< std::pair< void*, unsigned int > >::iterator j = it->second.begin(), jmax = it->second.end();
+			for( ; j != jmax; j++ )
+			{
+				free(j->first);
+			}
 		}
 
 		IndexManager* ix = IndexManager::instance();
 
-		_alreadyScanned.clear();
+		//_alreadyScanned.clear();
+		_mergingItems.clear();
 		std::vector<IX_ScanIterator*>::iterator
 			jt = ix->_iterators.begin(),
 			jmax = ix->_iterators.end();
@@ -711,9 +724,8 @@ void IX_ScanIterator::reset()
 }
 
 IX_ScanIterator::IX_ScanIterator()
-:  _bkt(0), _page(0), _slot(0), _alreadyScanned(std::vector< std::pair<void*, unsigned int> >()),
-  _lowKey(NULL), _lowKeyInclusive(false), _highKey(NULL), _highKeyInclusive(false), _fileHandle(NULL),
-  _pfme(NULL), _isReset(true)
+:  _maxBucket(0), _bkt(0), _page(0), _slot(0), _mergingItems(), _lowKey(NULL), _lowKeyInclusive(false),
+   _highKey(NULL), _highKeyInclusive(false), _fileHandle(NULL), _pfme(NULL), _isReset(true)
 {
 }
 
@@ -722,22 +734,30 @@ IX_ScanIterator::~IX_ScanIterator()
 	reset();
 }
 
-bool IX_ScanIterator::isEntryAlreadyScanned(const void* entry, unsigned int entryLength)
+bool IX_ScanIterator::isEntryAlreadyScanned(const BUCKET_NUMBER bktNumber, const void* entry, unsigned int entryLength)
 {
-	bool result = false;
+	bool result = true;
 
-	//scan thru the list of keys in the bucket
-	std::vector< std::pair<void*, unsigned int> >::iterator
-		it = _alreadyScanned.begin(), imax = _alreadyScanned.end();
-	for( ; it != imax; it++ )
+	//determine if the bucket was merged
+	if( _mergingItems.find(bktNumber) == _mergingItems.end() )
 	{
-		if( entryLength == it->second && memcmp(it->first, entry, it->second) == 0 )
+		//if it was not merged, then every item that is next is needed ti be scanned
+		return false;
+	}
+
+	//if it was merged, then the list for this bucket will keep items that were not scanned in this and/or image bucket
+	//scan thru the list of keys in the bucket
+	std::map< BUCKET_NUMBER, std::vector< std::pair< void*, unsigned int > > >::iterator it = _mergingItems.find(bktNumber);
+	std::vector< std::pair< void*, unsigned int > >::iterator j = it->second.begin(), jmax = it->second.end();
+	for( ; j != jmax; j++ )
+	{
+		//check if the iterated item is the given item
+		if( j->second == entryLength && memcmp(j->first, entry, entryLength) == 0 )
 		{
-			result = true;
+			result = false;
 			break;
 		}
 	}
-
 	return result;
 }
 
@@ -745,138 +765,92 @@ RC IX_ScanIterator::getNextEntry(RID &rid, void *key)
 {
 	RC errCode = 0;
 
-	if( _bkt == 85 && _page == 0 )
-	{
-		cout << "bucket = " << _bkt << ", page = " << _page << ", slot = " << _slot;
-	}
-	else if( _bkt == 85 && _page == 1 )
-	{
-		cout << "bucket = " << _bkt << ", page = " << _page << ", slot = " << _slot;
-	}
-
 	//check if scan is over or not (i.e. if maximum number of buckets has been reached)
-	unsigned int numBuckets = 0;
-	if( (errCode = IndexManager::instance()->getNumberOfPrimaryPages(*_fileHandle, numBuckets)) != 0 )
-	{
-		return errCode;
-	}
+	unsigned int numBuckets = _fileHandle->NumberOfBuckets();
 	if( _bkt >= numBuckets )
 	{
 		return IX_EOF;
 	}
 
-	//reload PFME (not a bug, do not remove)
 	free(_pfme);
 	_pfme = new PFMExtension(*_fileHandle, _bkt);
 
-	//iterate over the buckets, until the entry is found
-	for( ; _bkt < numBuckets; _bkt++ )
+	do
 	{
-		//determine number of pages in the current bucket
-		unsigned int maxPages = 0;
-		if( (errCode = _pfme->numOfPages(_bkt, maxPages)) != 0 )
+		//buffer for keeping the current entry
+		void* entry = malloc(PAGE_SIZE);
+		memset(entry, 0, PAGE_SIZE);
+
+		//get current tuple
+		if( (errCode = _pfme->getTuple(entry, _bkt, _page, _slot)) != 0 )
 		{
-			return errCode;
+			//go to the next item
+			continue;
 		}
 
-		//iterate over the pages of the current bucket
-		for( ; _page < (int)maxPages; _page++ )
+		if( _attr.type == TypeReal )
 		{
-			//determine number of slots in the current page
-			unsigned int maxSlots = 0;
-			if( (errCode = _pfme->getNumberOfEntriesInPage(_bkt, _page, maxSlots)) != 0 )
+			cout << "key = " << ((float*)entry)[0] << ", bkt = " << _bkt << ", page = " << _page << ", slot = " << _slot << endl;
+		}
+
+		//estimate size of entry
+		int entryLength = estimateSizeOfEntry(_attr, entry);
+
+		//check if this entry has already been processed
+		if( isEntryAlreadyScanned(_bkt, entry, entryLength) == false )
+		{
+			//for function "compareEntryKeyToSeparateKey" the output follows pattern outlined below:
+			//+1 entry.key is less than the another key
+			//0 entry.key is equal to the another key
+			//-1 entry.key is greater than the another key
+
+			int lowRes = 0, highRes = 0;
+
+			//if necessary perform comparison between entry and low key
+			if( _lowKey != NULL )
 			{
+				lowRes = compareEntryKeyToSeparateKey(_attr, entry, _lowKey);
+			}
+			else
+			{
+				//entry > lowKey
+				lowRes = -1;
+			}
+
+			//if necessary perform comparison between entry and high key
+			if( _highKey != NULL )
+			{
+				highRes = compareEntryKeyToSeparateKey(_attr, entry, _highKey);
+			}
+			else
+			{
+				//entry < highKey
+				highRes = 1;
+			}
+
+			int lowBoundary = _lowKeyInclusive ? 0 : -1,
+				highBoundary = _highKeyInclusive ? 0 : 1;
+
+			//check if an entry is within the given boundaries
+			if( lowRes <= lowBoundary && highRes >= highBoundary )
+			{
+				//the key is found
+				//1. copy entry payLoad to attribute RID
+				memcpy(&rid, (char*)entry + entryLength - sizeof(RID), sizeof(RID));
+				//2. copy entry key to attribute key
+				memcpy(key, (char*)entry, entryLength - sizeof(RID));	//found error in size of the transfered key
+				//3. increment slot to next
+				incrementToNext();
+				//success
 				return errCode;
 			}
-
-			//iterate over the slots
-			for( ; _slot < (int)maxSlots; _slot++ )
-			{
-				//buffer for keeping the current entry
-				void* entry = malloc(PAGE_SIZE);
-				memset(entry, 0, PAGE_SIZE);
-
-				//get current tuple
-				if( (errCode = _pfme->getTuple(entry, _bkt, _page, _slot)) != 0 )
-				{
-					//increment to next page and reset slot number
-					_page++;
-					_slot = 0;
-
-					//quit the inner loop and let the outer to decide whether to continue or not, depending if there are more pages left
-					break;
-				}
-
-				if( _attr.type == TypeReal )
-				{
-					cout << "key = " << ((float*)entry)[0] << endl;
-				}
-
-				//estimate size of entry
-				int entryLength = estimateSizeOfEntry(_attr, entry);
-
-				//check if this entry has already been processed
-				if( isEntryAlreadyScanned(entry, entryLength) == false )
-				{
-					//for function "compareEntryKeyToSeparateKey" the output follows pattern outlined below:
-					//+1 entry.key is less than the another key
-					//0 entry.key is equal to the another key
-					//-1 entry.key is greater than the another key
-
-					int lowRes = 0, highRes = 0;
-
-					//if necessary perform comparison between entry and low key
-					if( _lowKey != NULL )
-					{
-						lowRes = compareEntryKeyToSeparateKey(_attr, entry, _lowKey);
-					}
-					else
-					{
-						//entry > lowKey
-						lowRes = -1;
-					}
-
-					//if necessary perform comparison between entry and high key
-					if( _highKey != NULL )
-					{
-						highRes = compareEntryKeyToSeparateKey(_attr, entry, _highKey);
-					}
-					else
-					{
-						//entry < highKey
-						highRes = 1;
-					}
-
-					int lowBoundary = _lowKeyInclusive ? 0 : -1,
-						highBoundary = _highKeyInclusive ? 0 : 1;
-
-					//check if an entry is within the given boundaries
-					if( lowRes <= lowBoundary && highRes >= highBoundary )
-					{
-						//the key is found
-						//1. copy entry payLoad to attribute RID
-						memcpy(&rid, (char*)entry + entryLength - sizeof(RID), sizeof(RID));
-						//2. copy entry key to attribute key
-						memcpy(key, (char*)entry, entryLength - sizeof(RID));	//found error in size of the transfered key
-						//3. increment slot to next
-						incrementToNext();
-						//success
-						return errCode;
-					}
-				}
-				else
-				{
-					//if entry has already been processed, then deallocate its buffer and go to the next
-					free(entry);
-				}
-			}
-			//reset slot number
-			_slot = 0;
 		}
-		//reset page number
-		_page = 0;
-	}
-	_bkt = 0;
+		else
+		{
+			//if entry has already been processed, then deallocate its buffer and go to the next
+			free(entry);
+		}
+	} while( incrementToNext() == 0 );
 
 	//return end of index
 	return IX_EOF;
@@ -919,6 +893,7 @@ RC IX_ScanIterator::decrementToPrev()
 RC IX_ScanIterator::incrementToNext()
 {
 	RC errCode = 0;
+	bool reloadPage = false;
 
 	//reload PFME (not a bug, do not remove)
 	free(_pfme);
@@ -935,6 +910,7 @@ RC IX_ScanIterator::incrementToNext()
 	{
 		_page++;
 		_slot = 0;
+		reloadPage = true;
 	}
 	//		3.1.1 if next page does not exist => increment to next bucket (set page = 0, slot = 0,
 	//			  empty vector that stores keys in the bucket)
@@ -947,8 +923,68 @@ RC IX_ScanIterator::incrementToNext()
 	{
 		_page = 0;
 		_slot = 0;
-		_bkt++;
-		_alreadyScanned.clear();
+		reloadPage = true;
+		if( _mergingItems.find(_bkt) != _mergingItems.end() )
+		{
+			std::map< BUCKET_NUMBER, std::vector< std::pair< void*, unsigned int > > >::iterator
+				it = _mergingItems.find(_bkt);
+			std::vector< std::pair<void*, unsigned int> >::iterator j = it->second.begin(), jmax = it->second.end();
+			for( ; j != jmax; j++ )
+			{
+				free(j->first);
+			}
+			_mergingItems.erase(it);
+		}
+		//_bkt++;
+		//if( _bkt == _maxBucket )
+		//{
+		//	_bkt++;
+		//	_maxBucket++;
+		//}
+		//else
+		//{
+			//if there is an available "re-updated bucket", then go ahead and transfer to it
+		if( _mergingItems.size() > 0 )
+		{
+			_bkt = _mergingItems.begin()->first;
+		}
+		else
+		{
+			_maxBucket++;
+			_bkt = _maxBucket;
+		}
+			/*if( _mergingItems.size() == 0 )
+			{
+				//no other buckets were merged so that its high bucket would be higher than MAX and lower bucket lower than MAX
+				_maxBucket++;
+				_bkt = _maxBucket;
+			}
+			else
+			{
+				//there are some bucket(s) to be scanned, peek the first one
+				std::map< BUCKET_NUMBER, std::vector< std::pair< void*, unsigned int > > >::iterator
+					nextBkt = _mergingItems.begin();
+				_bkt = nextBkt->first;
+			}*/
+		//}
+	}
+
+	//check if scan is over or not (i.e. if maximum number of buckets has been reached)
+	unsigned int numBuckets = _fileHandle->NumberOfBuckets();
+	if( _bkt >= numBuckets )
+	{
+		return IX_EOF;
+	}
+
+	if( reloadPage )
+	{
+		//read data page
+		if( (errCode = _pfme->getPage(_bkt, _page)) != 0 )
+		{
+
+			//read failed
+			return errCode;
+		}
 	}
 
 	return errCode;
@@ -980,6 +1016,11 @@ IXFileHandle::~IXFileHandle()
 int IXFileHandle::N_Level()
 {
 	return (int)( pow((double)2.0, (int)_info->Level) * _info->N );
+}
+
+int IXFileHandle::NumberOfBuckets()
+{
+	return _info->Next + N_Level();
 }
 
 RC IXFileHandle::collectCounterValues(unsigned &readPageCount, unsigned &writePageCount, unsigned &appendPageCount)
@@ -1144,6 +1185,9 @@ void IX_PrintError (RC rc)
 	case -53:
 		errMsg = "iterator cannot go back to the previous bucket without bucket merge operation";
 		break;
+	case -54:
+		errMsg = "attempting to merge existing and non-existing buckets";
+		break;
 	}
 	//print message
 	std::cout << "component: " << compName << " => " << errMsg;
@@ -1176,6 +1220,48 @@ RC PFMExtension::translateVirtualToPhysical(PageNum& physicalPageNum, const BUCK
 
 	//success
 	return 0;
+}
+
+RC PFMExtension::getPage(const BUCKET_NUMBER bkt_number, const PageNum pageNumber)
+{
+	RC errCode = 0;
+
+	//determine physical page number from the given virtual page number
+	PageNum physicalPageNumber = 0;
+	if( (errCode = translateVirtualToPhysical(physicalPageNumber, bkt_number, pageNumber)) != 0 )
+	{
+		return errCode;
+	}
+
+	FileHandle handle;
+	if( pageNumber > 0 )
+	{
+		//if inside the overflow file
+		handle = _handle->_overBucketDataFileHandler;
+	}
+	else
+	{
+		//if inside the primary file
+		handle = _handle->_primBucketDataFileHandler;
+	}
+
+	//check if physical page number is beyond boundaries
+	if( physicalPageNumber >= handle.getNumberOfPages() )
+	{
+		return -27;
+	}
+
+	//retrieve the data and store in the current buffer
+	if( (errCode = handle.readPage(physicalPageNumber, _buffer)) != 0 )
+	{
+		return errCode;
+	}
+
+	_bktNumber = bkt_number;
+	_curVirtualPage = pageNumber;
+
+	//success
+	return errCode;
 }
 
 //virtual page number
@@ -1687,6 +1773,43 @@ RC PFMExtension::writePage(const BUCKET_NUMBER bkt_number, const PageNum pageNum
 	return errCode;
 }
 
+RC PFMExtension::determineAmountOfFreeSpace(const BUCKET_NUMBER bkt_number, const PageNum page_number, unsigned int& freeSpace)
+{
+	RC errCode = 0;
+
+	//if necessary read in the page
+	if( page_number != _curVirtualPage || _bktNumber != bkt_number )
+	{
+		//read data page
+		if( (errCode = getPage(bkt_number, page_number, _buffer)) != 0 )
+		{
+			//read failed
+			return errCode;
+		}
+
+		//update
+		_curVirtualPage = page_number;
+		_bktNumber = bkt_number;
+	}
+
+	//get pointer to the end of directory slots
+	PageDirSlot* startOfDirSlot = (PageDirSlot*)((char*)_buffer + PAGE_SIZE - 2 * sizeof(unsigned int));
+
+	//find out number of directory slots
+	unsigned int* numSlots = ((unsigned int*)startOfDirSlot);
+
+	//pointer to the start of the list of directory slots
+	PageDirSlot* ptrEndOfDirSlot = (PageDirSlot*)( startOfDirSlot - *numSlots );
+
+	unsigned int* ptrVarForFreeSpace = (unsigned int*)( (char*)(startOfDirSlot) + sizeof(unsigned int) );
+
+	//determine amount of free space
+	freeSpace = (unsigned int)( (char*)ptrEndOfDirSlot - (char*)((char*)_buffer + (unsigned int)*ptrVarForFreeSpace) );
+
+	//success
+	return errCode;
+}
+
 RC PFMExtension::shiftRecursivelyToEnd //NOT TESTED
 	(const BUCKET_NUMBER bkt_number, const PageNum currentPageNumber, const unsigned int startingFromSlotNumber,
 	map<void*, unsigned int> slotsToShiftFromPriorPage)
@@ -2112,13 +2235,16 @@ RC PFMExtension::deleteTuple(const BUCKET_NUMBER bkt_number, const PageNum pageN
 
 	unsigned int numOfOverflowPages = _handle->_info->_overflowPageIds[bkt_number].size();
 
-	_curVirtualPage = numOfOverflowPages == 0 ? 0 : numOfOverflowPages - 1;
-	if( (errCode = getPage(bkt_number, _curVirtualPage, _buffer)) != 0 )
+	//allocate additional buffer for checking whether the last page is empty or not
+	void* extraBuffer = malloc(PAGE_SIZE);
+	memset(extraBuffer, 0, PAGE_SIZE);
+
+	if( (errCode = getPage(bkt_number, numOfOverflowPages, extraBuffer)) != 0 )
 	{
 		return errCode;
 	}
 
-	lastPageIsEmpty = (unsigned int*)((char*)_buffer + PAGE_SIZE - 2 * sizeof(unsigned int)) == 0;
+	lastPageIsEmpty = (bool)( ( (unsigned int*)((char*)extraBuffer + PAGE_SIZE - 2 * sizeof(unsigned int)) )[0] == 0 );
 
 	//success
 	return errCode;
@@ -2387,7 +2513,7 @@ int MetaDataSortedEntries::searchEntryInPage(RID& result, const PageNum& pageNum
 		}
 		else
 		{
-			isBounding = true;
+			isBounding = numEntries > 0;
 		}
 
 		return indexStart == 0 ? -1 : 1;	//-1 means looking for item less than those presented in this page
@@ -2754,7 +2880,7 @@ RC MetaDataSortedEntries::insertEntry(const RID& rid)
 		//printFile(_ixfilehandle->_overBucketDataFileHandler);
 
 		//check if we need to increment level
-		if( _ixfilehandle->_info->Next == _ixfilehandle->_info->N * (int)pow(2.0, (int)_ixfilehandle->_info->Level) )
+		if( _ixfilehandle->_info->Next == _ixfilehandle->N_Level() )
 		{
 			_ixfilehandle->_info->Level++;
 			_ixfilehandle->_info->Next = 0;
@@ -2919,8 +3045,6 @@ RC MetaDataSortedEntries::deleteEntry(const RID& rid)
 					return errCode;
 				}
 				numOfEntriesInPage = position.slotNum;
-
-				continue;
 			}
 
 			//decrement index
@@ -3068,6 +3192,10 @@ RC MetaDataSortedEntries::deleteEntry(const RID& rid)
 						_ixfilehandle->_info->N * (unsigned int)pow(2.0, (int)(_ixfilehandle->_info->Level - 1))
 					);
 			_ixfilehandle->_info->Level--;
+			if( _ixfilehandle->_info->Level < 0 )
+			{
+				_ixfilehandle->_info->Level = 0;
+			}
 		}
 
 		//if it is a last primary bucket, then "merge it with its image"
@@ -3182,6 +3310,12 @@ RC MetaDataSortedEntries::splitBucket()
 	RC errCode = 0;
 
 	BUCKET_NUMBER bktNumber[2] = {_bktNumber, _bktNumber + _ixfilehandle->N_Level()};
+
+	cout << "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!" << endl;
+	cout << "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!" << endl;
+	cout << "MERGING BUCKETS " << bktNumber[0] << " with " << bktNumber[1] << endl;
+	cout << "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!" << endl;
+	cout << "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!" << endl;
 
 	//add page for primary bucket, providing that the file does not have one already
 	if( _ixfilehandle->_primBucketDataFileHandler._info->_numPages < bktNumber[1] + 2 )
@@ -3339,13 +3473,13 @@ RC MetaDataSortedEntries::splitBucket()
 				slotNum = 1;
 
 				//check whether it is some PFME issue
-				if( it == output[i].begin() )
-				{
-					free(entry);
-					free(bucketController[0]);
-					free(bucketController[1]);
-					return -51;	//PFME is buggy, since page is not full, but it is claimed to be full
-				}
+				//if( it == output[i].begin() )
+				//{
+				//	free(entry);
+				//	free(bucketController[0]);
+				//	free(bucketController[1]);
+				//	return -51;	//PFME is buggy, since page is not full, but it is claimed to be full
+				//}
 			}
 
 			//deallocate buffer
@@ -3382,25 +3516,49 @@ RC MetaDataSortedEntries::mergeBuckets()
 
 	BUCKET_NUMBER bktNumber[2] = {_bktNumber, _bktNumber + _ixfilehandle->N_Level()};
 
-	unsigned int numberOfPagesFromFunction = 0;
-	// Get number of primary pages
-	RC rc = IndexManager::instance()->getNumberOfPrimaryPages(*_ixfilehandle, numberOfPagesFromFunction);
-	if(rc != 0)
+	//check if both buckets exist
+	if( _ixfilehandle->NumberOfBuckets() <= (int)bktNumber[1] )
 	{
-		cout << "getNumberOfPrimaryPages() failed." << endl;
+		if( _ixfilehandle->_info->Level == 0 )
+			return 0;
+		//return -54;
+	}
+
+	cout << "MERGING BUCKETS " << bktNumber[0] << " with " << bktNumber[1] << endl;
+
+	std::map< IX_ScanIterator*, std::vector< std::pair<void*, unsigned int> > > mergingIterList;
+
+	//setup merging iterator list
+	IndexManager* ixm = IndexManager::instance();
+	std::vector<IX_ScanIterator*>::iterator  vIterIt = ixm->_iterators.begin(), vIterMax = ixm->_iterators.end();
+	for( ; vIterIt != vIterMax; vIterIt++ )
+	{
+		//check whether iterator needs to know about this splitting strategy
+		if( (*vIterIt)->_maxBucket <= bktNumber[1] && (*vIterIt)->_maxBucket >= bktNumber[0] )
+		{
+			mergingIterList.insert
+			(
+				std::pair<IX_ScanIterator*, std::vector< std::pair<void*, unsigned int> > >
+				(
+					*vIterIt, std::vector< std::pair<void*, unsigned int> >()
+				)
+			);
+		}
+	}
+
+	// Print two buckets
+	/*errCode = IndexManager::instance()->printIndexEntriesInAPage(*_ixfilehandle, _attr, bktNumber[0]);
+	if (errCode != 0) {
+		cout << "printIndexEntriesInAPage() failed." << endl;
 		//indexManager->closeFile(ixfileHandle);
 		return -1;
 	}
-
-	// Print Entries in each page
-	for (unsigned i = 0; i < numberOfPagesFromFunction; i++) {
-		rc = IndexManager::instance()->printIndexEntriesInAPage(*_ixfilehandle, _attr, i);
-		if (rc != 0) {
-			cout << "printIndexEntriesInAPage() failed." << endl;
-			//indexManager->closeFile(ixfileHandle);
-			return -1;
-		}
-	}
+	errCode = IndexManager::instance()->printIndexEntriesInAPage(*_ixfilehandle, _attr, bktNumber[1]);
+	if (errCode != 0) {
+		cout << "printIndexEntriesInAPage() failed." << endl;
+		//indexManager->closeFile(ixfileHandle);
+		return -1;
+	}*/
 
 	//two buckets will be "controlled" by an individual PFMExtension component
 	PFMExtension* bucketController[2] = { NULL, NULL };
@@ -3425,6 +3583,9 @@ RC MetaDataSortedEntries::mergeBuckets()
 	//accumulate result inside "output buffer"
 	std::vector< std::pair<void*, unsigned int> > output;
 
+
+	//bool debugFlag = false;
+
 	//iterate over 2 buckets
 	while( IsBucketEmpty[0] == false || IsBucketEmpty[1] == false )	//keep looping while there is at least 1 bucket non-empty
 	{
@@ -3434,6 +3595,9 @@ RC MetaDataSortedEntries::mergeBuckets()
 		{
 			if( (errCode = bucketController[i]->getTuple( tuples[i], bktNumber[i], pageNumber[i], slotNumber[i] )) != 0 )
 			{
+				pageNumber[i]++;
+				slotNumber[i] = 0;
+
 				//determine if there are more pages in the given bucket
 				if( pageNumber[i] >= (int)maxPages[i] )
 				{
@@ -3444,16 +3608,10 @@ RC MetaDataSortedEntries::mergeBuckets()
 				}
 
 				//if there are more pages, then go ahead and repeat procedure of getting a new tuple in the next page
-				pageNumber[i]++;
-				slotNumber[i] = 0;
-
 				//re-run the getTuple on this bucket with the reset page/slot information
 				i--;
-				continue;
+				//debugFlag = true;
 			}
-
-			//update slot number
-			slotNumber[i]++;
 		}
 
 		void* buf = NULL;
@@ -3482,10 +3640,14 @@ RC MetaDataSortedEntries::mergeBuckets()
 			//if bucket # 0 is not empty
 			selected_tuple_index = 0;
 		}
-		else
+		else if( IsBucketEmpty[1] == false )
 		{
 			//if bucket # 1 is not empty
 			selected_tuple_index = 1;
+		}
+		else
+		{
+			break;
 		}
 
 		//allocate buffer for the tuple and copy it in
@@ -3495,11 +3657,81 @@ RC MetaDataSortedEntries::mergeBuckets()
 
 		//insert buffer into output vector
 		output.push_back( std::pair<void*, unsigned int>(buf, sz_of_buf) );
+
+		if(_attr.type == TypeReal )
+		{
+			cout << ((float*)buf)[0];
+			if( output.size() % 50 == 0 && output.size() > 0 )
+				cout << endl;
+			else
+				cout << " , ";
+			//if( (int)((float*)buf)[0] == 13821 )
+			//{
+			//	cout << "disaster happens here";
+			//}
+		}
+
 		//not a bug: do not deallocate buffer 'buf'
+
+		//update slot number for which item was selected
+		slotNumber[selected_tuple_index]++;
+
+		//loop thru iterators
+		std::map< IX_ScanIterator*, std::vector< std::pair<void*, unsigned int> > >::iterator
+			mi_it = mergingIterList.begin(), mi_max = mergingIterList.end();
+		for( ; mi_it != mi_max; mi_it++ )
+		{
+			//now determine whether this item needs to be added to the current merging iterator list
+			if( mi_it->first->_maxBucket == bktNumber[selected_tuple_index] )
+			{
+				//some elements could already be scanned => we should only add those that are not yet scanned
+				if( slotNumber[selected_tuple_index] >= mi_it->first->_slot )
+				{
+					//then this item has not yet been scanned, go ahead and add it to the list
+					void* entryToCopy = malloc(sz_of_buf);
+					memcpy(entryToCopy, buf, sz_of_buf);
+					mi_it->second.push_back( std::pair<void*, unsigned int>(entryToCopy, sz_of_buf) );
+					//same as 'buf', do not deallocate over here
+				}
+			}
+			if( mi_it->first->_maxBucket < bktNumber[1] )
+			{
+				//now if we are either in the lower bucket or in some other one but it is between
+				//these lower and higher buckets, then add all elements of the higher bucket to
+				//the yet to be scanned list (i.e. always add a new item)
+				void* entryToCopy = malloc(sz_of_buf);
+				memcpy(entryToCopy, buf, sz_of_buf);
+				mi_it->second.push_back( std::pair<void*, unsigned int>(entryToCopy, sz_of_buf) );
+				//same as 'buf', do not deallocate over here
+			}
+		}
+
 	}
+
+	//cout << endl;
+
+	//if( debugFlag )
+	//{
+		// Print two buckets
+		/*errCode = IndexManager::instance()->printIndexEntriesInAPage(*_ixfilehandle, _attr, bktNumber[0]);
+		if (errCode != 0) {
+			cout << "printIndexEntriesInAPage() failed." << endl;
+			//indexManager->closeFile(ixfileHandle);
+			return -1;
+		}
+		errCode = IndexManager::instance()->printIndexEntriesInAPage(*_ixfilehandle, _attr, bktNumber[1]);
+		if (errCode != 0) {
+			cout << "printIndexEntriesInAPage() failed." << endl;
+			//indexManager->closeFile(ixfileHandle);
+			return -1;
+		}*/
+	//}
 
 	//empty out the lower bucket
 	bucketController[0]->emptyOutSpecifiedBucket(_bktNumber);
+
+	free(bucketController[0]);
+	bucketController[0] = new PFMExtension(*_ixfilehandle, bktNumber[0]);
 
 	bool newPage = false;
 	unsigned int pageNum = 0, slotNum = 0;
@@ -3508,40 +3740,49 @@ RC MetaDataSortedEntries::mergeBuckets()
 	std::vector< std::pair<void*, unsigned int> >::iterator it = output.begin(), it_max = output.end();
 	for( ; it != it_max; it++ )
 	{
-		if( (errCode = bucketController[0]->insertTuple( it->first, it->second, _bktNumber, pageNum, slotNum, newPage )) != 0 )
+
+		//if( _attr.type == TypeReal )
+		//{
+		//	cout << "void*: " << ( (float*)it->first )[0] << "size: " << it->second << endl;
+		//}
+
+		//if( slotNum == 203 && debugFlag )
+		//{
+		//	cout << "slot Number : " << slotNum << endl;
+		//}
+
+		//determine free space left in the given page
+		unsigned int freeSpaceLeftInPage = 0;
+		if( (errCode = bucketController[0]->determineAmountOfFreeSpace(_bktNumber, pageNum, freeSpaceLeftInPage)) != 0 )
 		{
 			IX_PrintError(errCode);
 			return errCode;
 		}
 
-							if( slotNum % 204 >= 202 && slotNum % 204 == 0 )
-							{
-								numberOfPagesFromFunction = 0;
-								// Get number of primary pages
-								RC rc = IndexManager::instance()->getNumberOfPrimaryPages(*_ixfilehandle, numberOfPagesFromFunction);
-								if(rc != 0)
-								{
-									cout << "getNumberOfPrimaryPages() failed." << endl;
-									//indexManager->closeFile(ixfileHandle);
-									return -1;
-								}
-
-								// Print Entries in each page
-								for (unsigned i = 0; i < numberOfPagesFromFunction; i++) {
-									rc = IndexManager::instance()->printIndexEntriesInAPage(*_ixfilehandle, _attr, i);
-									if (rc != 0) {
-										cout << "printIndexEntriesInAPage() failed." << endl;
-										//indexManager->closeFile(ixfileHandle);
-										return -1;
-									}
-								}
-							}
-
-		//current page is full, go to the next
-		if( newPage )
+		//check if new item will fit in
+		if( freeSpaceLeftInPage < it->second )
 		{
+			//increment to next page
 			pageNum++;
 			slotNum = 0;
+
+			//check whether bucket has new page, if not add it
+			if( pageNum + 1 > _ixfilehandle->_info->_overflowPageIds[_bktNumber].size() )
+			{
+				//allocate new page data buffer
+				void* newPageDataBuffer = malloc(PAGE_SIZE);
+				memset(newPageDataBuffer, 0, PAGE_SIZE);
+
+				//add the page to this file
+				if( (errCode = bucketController[0]->addPage(newPageDataBuffer, _bktNumber)) != 0 )
+				{
+					free(newPageDataBuffer);
+					return errCode;
+				}
+
+				//deallocate data page buffer
+				free(newPageDataBuffer);
+			}
 
 			//check whether it is some PFME issue
 			if( it == output.begin() )
@@ -3554,11 +3795,57 @@ RC MetaDataSortedEntries::mergeBuckets()
 			}
 		}
 
+		if( slotNum == 0 && pageNum == 1 && _bktNumber == 63 && ((unsigned int*)it->first)[1] == 4122 )
+		{
+			cout << "got here, float = " << ( (float*)it->first )[0] << endl;
+		}
+
+		//now since we know that the page has enough of space, go on and insert a new item
+		if( (errCode = bucketController[0]->insertTuple( it->first, it->second, _bktNumber, pageNum, slotNum, newPage )) != 0 )
+		{
+			IX_PrintError(errCode);
+			return errCode;
+		}
+
+		//if( debugFlag )
+		//{
+			// Print two buckets
+			/*errCode = IndexManager::instance()->printIndexEntriesInAPage(*_ixfilehandle, _attr, bktNumber[0]);
+			if (errCode != 0) {
+				cout << "printIndexEntriesInAPage() failed." << endl;
+				//indexManager->closeFile(ixfileHandle);
+				return -1;
+			}
+			errCode = IndexManager::instance()->printIndexEntriesInAPage(*_ixfilehandle, _attr, bktNumber[1]);
+			if (errCode != 0) {
+				cout << "printIndexEntriesInAPage() failed." << endl;
+				//indexManager->closeFile(ixfileHandle);
+				return -1;
+			}*/
+		//}
+
 		//increment to next slot
 		slotNum++;
 
 		//free the entry buffer
 		free(it->first);
+	}
+
+	//add merging iterator lists to the appropriate iterators
+	std::map< IX_ScanIterator*, std::vector< std::pair<void*, unsigned int> > >::iterator
+		milit = mergingIterList.begin(), milmax = mergingIterList.end();
+	for( ; milit != milmax; milit++ )
+	{
+		milit->first->_mergingItems.insert
+		(
+			std::pair<BUCKET_NUMBER, std::vector< std::pair<void*, unsigned int> > >(bktNumber[0], milit->second)
+		);
+
+		//if this iterator is scanning the upper (higher) bucket, then transfer it immediately to the start of re-updated lower bucket
+		if( milit->first->_bkt == bktNumber[1] )
+		{
+			milit->first->resetToBucketStart(bktNumber[0]);	//reset to the start of the lower bucket
+		}
 	}
 
 	//deallocate buffers and other variables
@@ -3567,6 +3854,23 @@ RC MetaDataSortedEntries::mergeBuckets()
 	free(tuples[0]);
 	free(tuples[1]);
 
+	//if( debugFlag )
+	//{
+		// Print two buckets
+		/*errCode = IndexManager::instance()->printIndexEntriesInAPage(*_ixfilehandle, _attr, bktNumber[0]);
+		if (errCode != 0) {
+			cout << "printIndexEntriesInAPage() failed." << endl;
+			//indexManager->closeFile(ixfileHandle);
+			return -1;
+		}
+		errCode = IndexManager::instance()->printIndexEntriesInAPage(*_ixfilehandle, _attr, bktNumber[1]);
+		if (errCode != 0) {
+			cout << "printIndexEntriesInAPage() failed." << endl;
+			//indexManager->closeFile(ixfileHandle);
+			return -1;
+		}*/
+	//}
+
 	//success
-	return errCode;
+	return 0;
 }

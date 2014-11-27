@@ -16,8 +16,8 @@ class IXFileHandle;
 struct indexInfo
 {
 	unsigned int N;
-	unsigned int Level;
-	unsigned int Next;
+	int Level;
+	int Next;
 	map<BUCKET_NUMBER, map<int, PageNum> > _overflowPageIds;
 	indexInfo()
 	: N(0), Level(0), Next(0)
@@ -125,15 +125,17 @@ class IX_ScanIterator {
   RC getNextEntry(RID &rid, void *key);  		// Get next matching entry
   RC close();             						// Terminate index scan
   void reset();
-  bool isEntryAlreadyScanned(const void* entry, unsigned int entryLength);
+  bool isEntryAlreadyScanned(const BUCKET_NUMBER bktNumber, const void* entry, unsigned int entryLength);
   RC incrementToNext();
   RC decrementToPrev();
   void resetToBucketStart(BUCKET_NUMBER bktNumber);
   void currentPosition(BUCKET_NUMBER& bkt, PageNum& page, unsigned int& slot);
+  BUCKET_NUMBER _maxBucket;
   BUCKET_NUMBER _bkt;
   int _page;
   int _slot;
-  std::vector< std::pair<void*, unsigned int> > _alreadyScanned;	//stores separately allocated entry buffers (not pointers)
+  //std::vector< std::pair<void*, unsigned int> > _alreadyScanned;	//stores separately allocated entry buffers (not pointers)
+  std::map< BUCKET_NUMBER, std::vector< std::pair<void*, unsigned int> > > _mergingItems;
   const void* _lowKey;		//NULL is -INF
   bool _lowKeyInclusive;
   const void* _highKey;		//NULL is +INF
@@ -154,6 +156,7 @@ public:
     ~IXFileHandle(); 							// Destructor
 
     int N_Level();
+    int NumberOfBuckets();
 
     //file handles
 	FileHandle _metaDataFileHandler;
@@ -187,12 +190,15 @@ public:
 	~PFMExtension();
 	RC translateVirtualToPhysical(PageNum& physicalPageNum, const BUCKET_NUMBER bktNumber, const PageNum virtalPageNum);
 	RC getPage(const BUCKET_NUMBER bkt_number, const PageNum pageNumber, void* buffer);
+	RC getPage(const BUCKET_NUMBER bkt_number, const PageNum pageNumber);
 	RC getTuple(void* tuple, const BUCKET_NUMBER bkt_number, const PageNum pageNumber, const int slotNumber);
 	RC shiftRecordsToStart(
 			const BUCKET_NUMBER bkt_number, const PageNum startingInPageNumber, const int startingFromSlotNumber);
 	RC shiftRecordsToEnd(
 			const BUCKET_NUMBER bkt_number, const PageNum startingInPageNumber,
 			const int startingFromSlotNumber, unsigned int szInBytes);
+	RC determineAmountOfFreeSpace(
+			const BUCKET_NUMBER bkt_number, const PageNum page_number, unsigned int& freeSpace);
 	RC deleteTuple(const BUCKET_NUMBER bkt_number, const PageNum pageNumber, const int slotNumber, bool& lastPageIsEmpty);
 	RC insertTuple(
 			void* tupleData, const unsigned int tupleLength, const BUCKET_NUMBER bkt_number,
