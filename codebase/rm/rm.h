@@ -8,6 +8,7 @@
 #include <map>
 
 #include "../rbf/rbfm.h"
+#include "../ix/ix.h"
 
 using namespace std;
 
@@ -37,8 +38,20 @@ private:
 	RBFM_ScanIterator _iterator;
 };
 
+class RM_IndexScanIterator {
+public:
+	RM_IndexScanIterator();  	// Constructor
+	~RM_IndexScanIterator(); 	// Destructor
+
+	// "key" follows the same format as in IndexManager::insertEntry()
+	RC getNextEntry(RID &rid, void *key);  	// Get next matching entry
+	RC close();             			// Terminate index scan
+	IX_ScanIterator _iterator;
+};
+
 struct ColumnInfo;
 struct TableInfo;
+struct IndexInfo;
 
 // Relation Manager
 class RelationManager
@@ -84,6 +97,8 @@ public:
   //insert element, iterated by <insertElementsFromTableIntoMap>, into _catalogTable
   void processTableRecordAndInsertIntoMap(const void* data, const RID& rid);
 
+  void processIndexRecordAndInsertIntoMap(const void* buffer, const RID& rid);
+
   //insert element, iterated by <insertElementsFromTableIntoMap>, into _catalogColumn
   void processColumnRecordAndInsertIntoMap(const void* data, const RID& rid);
 
@@ -97,11 +112,28 @@ public:
   RC createRecordInColumns(FileHandle& columnHandle, const std::vector<Attribute>& desc, unsigned int tableId, const char * columnName,
 		  AttrType columnType, unsigned int columnLength, bool isDropped, RID& rid);
 
+  RC createRecordInIndexes(FileHandle& columnHandle, const std::vector<Attribute>& desc, unsigned int tableId,
+		  const char* colName, const char* fileName, RID& rid);
+
   //check whether table with the given name exists
   bool isTableExisiting(const std::string& tableName);
 
   //debugging function for printing information
   RC printTable(const std::string& tableName);
+
+  RC createIndex(const string &tableName, const string &attributeName);
+
+  RC destroyIndex(const string &tableName, const string &attributeName);
+
+  // indexScan returns an iterator to allow the caller to go through qualified entries in index
+  RC indexScan(const string &tableName,
+		  const string &attributeName,
+		  const void *lowKey,
+		  const void *highKey,
+		  bool lowKeyInclusive,
+		  bool highKeyInclusive,
+		  RM_IndexScanIterator &rm_IndexScanIterator
+		 );
 
 // Extra credit
 public:
@@ -112,8 +144,22 @@ public:
   RC reorganizeTable(const string &tableName);
 
 
-
 protected:
+  RC printIndexFile(const string& fileName, const Attribute& attrOfKey);
+  //compose index name that is used to access index files
+  std::string composeIndexName(const std::string& tableName, const std::string& columnName);
+  //get list of Attributes for any of 3 catalog tables, i.e. Tables, Columns, or Indexes
+  void getCatalogDescription(const string& tableName, std::vector<Attribute>& result);
+  //check whether the given name is identical to any catalog table names (i.e. Tables, Columns, or Indexes)
+  bool isCatalogTable(const string& name);
+  // given record (content of which is stored inside "data") and record description in terms of its attributes (stored in "desc")
+  // determine an offset (byte-offset) from the start of the record to the start of the specified attribute (specified by index
+  // "attrIndex")
+  unsigned int getOffset(const void* data, const std::vector<Attribute> desc, int attrIndex);
+  // remove entry from the IX index files
+  RC deleteIXEntry(const string& tableName, const std::vector<Attribute> attrs, const void* data, const RID& rid);
+  // insert entry into IX index files
+  RC insertIXEntry(const string& tableName, const std::vector<Attribute> attrs, const void* data, const RID& rid);
   RelationManager();
   ~RelationManager();
 
@@ -128,6 +174,9 @@ private:
   //hash map for quick lookup of column inside the catalog's Table of columns
   std::map< int, std::vector< ColumnInfo > > _catalogColumn;	//<table id, <list of column info> >
 
+  //hash map for quick lookup of index inside the catalog's Table of indexes
+  std::map< int, std::map< std::string, IndexInfo > > _catalogIndex;	//<table id, <column name, index file name>>
+
   //list of table IDs that are now unoccupied, and were used by the deleted tables
   std::stack<unsigned int> _freeTableIds;
 
@@ -137,6 +186,17 @@ private:
 
 
 //after this line, our constants, structures, and data types were added
+
+struct IndexInfo
+{
+	//there are 3 files associates with index for each attribute: *_meta, *_over, and *_prim
+	//instead of storing each such name, _indexName would store common part among these
+	//names, i.e. the content that goes instead of '*'
+	std::string _indexName;
+
+	//rid for record inside the catalog Indexes table file
+	RID _rid;
+};
 
 struct TableInfo
 {
@@ -186,10 +246,14 @@ struct ColumnInfo
 //constants used to identify file names for two system tables - table and column
 #define CATALOG_TABLE_NAME "Tables"
 #define CATALOG_COLUMN_NAME "Columns"
+#define CATALOG_INDEX_NAME "Indexes"
 
 //table IDs for the table and column
 #define CATALOG_TABLE_ID 1
 #define CATALOG_COLUMN_ID 2
+#define CATALOG_INDEX_ID 3
+
+#define INDEX_DEFAULT_NUM_PAGES 1
 
 //any name (table, column, field, file, ...) stored inside DB cannot exceed the maximum size of
 //record minus 4 bytes for storing its actual size (due to VarChar format)
