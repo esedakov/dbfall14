@@ -297,6 +297,7 @@ void RelationManager::createCatalog()
 			(Attribute) {indexDescFields[2], AttrType(2), MAX_SIZE_OF_NAME_IN_DB});
 	listOfTableAttrs.insert( std::pair<std::string, std::vector<Attribute> >( CATALOG_INDEX_NAME, index ) );
 
+
 	IndexManager* ix = IndexManager::instance();
 
 	std::map<std::string, std::vector<Attribute> >::iterator j = listOfTableAttrs.begin(), jmax = listOfTableAttrs.end();

@@ -46,6 +46,7 @@ RC IndexManager::createFile(const string &fileName, const unsigned &numberOfPage
 {
 	RC errCode = 0;
 
+
 	//for faster function access create a PFM pointer
 	PagedFileManager* _pfm = PagedFileManager::instance();
 
