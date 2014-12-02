@@ -13,8 +13,8 @@
 //	-35 = specified column does not exist
 //	-36 = attempting to drop non-existing OR add existing field inside the record
 //	-37 = wrong table arguments
-//  -38 = cannot find attribute inside index catalog map
-//	-39 = setting up IX scan in RM with wrong attribute name
+
+//	-38 = index already exists
 
 RelationManager* RelationManager::_rm = 0;
 
@@ -28,8 +28,6 @@ RelationManager* RelationManager::instance() {
 void RelationManager::cleanup() {
 	remove(CATALOG_TABLE_NAME);
 	remove(CATALOG_COLUMN_NAME);
-	//project 4: remove catalog index file
-	remove(CATALOG_INDEX_NAME);
 }
 
 RC RelationManager::createRecordInTables(FileHandle& tableHandle,
@@ -64,9 +62,8 @@ RC RelationManager::createRecordInTables(FileHandle& tableHandle,
 	memcpy(p, tableName, lenOfTableNameField);
 
 	//insert record
-	//if ((errCode = _rbfm->insertRecord(tableHandle, table, recordData, rid)) != 0 )
-	if( (errCode = insertTuple(tableHandle._info->_name, recordData, rid)) != 0 )
-	{
+	if ((errCode = _rbfm->insertRecord(tableHandle, table, recordData, rid))
+			!= 0) {
 		//deallocate record's buffer
 		free(recordData);
 
@@ -119,9 +116,8 @@ RC RelationManager::createRecordInColumns(FileHandle& columnHandle,
 	((unsigned int*) p)[0] = isDropped ? 1 : 0;
 
 	//insert record
-	//if ((errCode = _rbfm->insertRecord(columnHandle, desc, recordData, rid)) != 0)
-	if( (errCode = insertTuple(columnHandle._info->_name, recordData, rid)) != 0 )
-	{
+	if ((errCode = _rbfm->insertRecord(columnHandle, desc, recordData, rid))
+			!= 0) {
 		//deallocate record's buffer
 		free(recordData);
 
@@ -237,150 +233,16 @@ void RelationManager::createCatalog()
 	//create new files for table and column
 	if (_rbfm->createFile(CATALOG_TABLE_NAME) != 0
 			|| _rbfm->createFile(CATALOG_COLUMN_NAME) != 0
-			|| _rbfm->createFile(CATALOG_INDEX_NAME) != 0) {
+			|| _rbfm->createFile(CATALOG_INDEX_NAME)) {
 		//abort
 		exit(-1);
 	}
 
-	RC errCode = 0;
-
-	//insert an entry into _catalogTable
-	RID tempRid = {0, 0};
-	_catalogTable.insert(
-			std::pair<string, TableInfo>(CATALOG_TABLE_NAME,
-					(TableInfo) {CATALOG_TABLE_ID, CATALOG_TABLE_NAME, tempRid}));
-	_catalogTable.insert(
-			std::pair<string, TableInfo>(CATALOG_COLUMN_NAME,
-					(TableInfo) {CATALOG_COLUMN_ID, CATALOG_COLUMN_NAME, tempRid}));
-	_catalogTable.insert(
-			std::pair<string, TableInfo>(CATALOG_INDEX_NAME,
-					(TableInfo) {CATALOG_INDEX_ID, CATALOG_INDEX_NAME, tempRid}));
-
-	std::map<std::string, std::vector<Attribute> > listOfTableAttrs;
-
-	//prepare Table's table attributes
-	std::vector<Attribute> table;
-	const char* tableDescFields[] = { "table-id", "table-name", "file-name" };
-
-	table.push_back(
-			(Attribute) {tableDescFields[0], AttrType(0), sizeof(unsigned int)});
-	table.push_back(
-			(Attribute) {tableDescFields[1], AttrType(2), MAX_SIZE_OF_NAME_IN_DB});
-	table.push_back(
-			(Attribute) {tableDescFields[2], AttrType(2), MAX_SIZE_OF_NAME_IN_DB});
-	listOfTableAttrs.insert( std::pair<std::string, std::vector<Attribute> >( CATALOG_TABLE_NAME, table ) );
-
-	//prepare Column's table attributes
-	std::vector<Attribute> column;
-	const char* columnDescFields[] = { "table-id", "column-name", "column-type",
-			"column-length", "column-status" };
-	column.push_back(
-			(Attribute) {columnDescFields[0], AttrType(0), sizeof(unsigned int)});
-	column.push_back(
-			(Attribute) {columnDescFields[1], AttrType(2), MAX_SIZE_OF_NAME_IN_DB});
-	column.push_back(
-			(Attribute) {columnDescFields[2], AttrType(0), sizeof(unsigned int)});
-	column.push_back(
-			(Attribute) {columnDescFields[3], AttrType(0), sizeof(unsigned int)});
-	column.push_back(
-			(Attribute) {columnDescFields[4], AttrType(0), sizeof(unsigned int)});
-	listOfTableAttrs.insert( std::pair<std::string, std::vector<Attribute> >( CATALOG_COLUMN_NAME, column ) );
-
-	//prepare Index's table attributes
-	std::vector<Attribute> index;
-	const char* indexDescFields[] = { "table-id", "column-name", "index-file-name" };
-	index.push_back(
-			(Attribute) {indexDescFields[0], AttrType(0), sizeof(unsigned int)});
-	index.push_back(
-			(Attribute) {indexDescFields[1], AttrType(2), MAX_SIZE_OF_NAME_IN_DB});
-	index.push_back(
-			(Attribute) {indexDescFields[2], AttrType(2), MAX_SIZE_OF_NAME_IN_DB});
-	listOfTableAttrs.insert( std::pair<std::string, std::vector<Attribute> >( CATALOG_INDEX_NAME, index ) );
-
-
-	IndexManager* ix = IndexManager::instance();
-
-	std::map<std::string, std::vector<Attribute> >::iterator j = listOfTableAttrs.begin(), jmax = listOfTableAttrs.end();
-	for( ; j != jmax; j++ )
-	{
-		//insert record (tuple) into catalog Table's table
-		std::vector<Attribute>::const_iterator i = j->second.begin(), imax = j->second.end();
-		string tableName = j->first;
-		for( ; i != imax; i++ )
-		{
-			//create index file
-			//string indexName = tableName + "_" + attributeName + "_";
-			string indexName = composeIndexName(tableName, i->name);
-			if( (errCode = ix->createFile(indexName, INDEX_DEFAULT_NUM_PAGES)) != 0 )
-			{
-				cleanup();
-				exit(errCode);
-			}
-		}
-	}
-
-	//create Table by inserting it's meta data into all catalog tables and compiling all attribute indexes
-	if( (errCode = createTable(CATALOG_TABLE_NAME, table)) != 0 )
-	{
-		cleanup();
-		exit(errCode);
-	}
-
-	/*if( (errCode = printTable(CATALOG_TABLE_NAME)) != 0 )
-	{
-		cleanup();
-		exit(errCode);
-	}*/
-
-	//create Column by inserting it's meta data into all catalog tables and compiling attribute indexes
-	if( (errCode = createTable(CATALOG_COLUMN_NAME, column)) != 0 )
-	{
-		cleanup();
-		exit(errCode);
-	}
-
-	/*if( (errCode = printTable(CATALOG_TABLE_NAME)) != 0 )
-	{
-		cleanup();
-		exit(errCode);
-	}
-	if( (errCode = printTable(CATALOG_COLUMN_NAME)) != 0 )
-	{
-		cleanup();
-		exit(errCode);
-	}*/
-
-	//create Index by inserting it's meta data into all catalog tables and compiling attribute indexes
-	if( (errCode = createTable(CATALOG_INDEX_NAME, index)) != 0 )
-	{
-		cleanup();
-		exit(errCode);
-	}
-
-	/*if( (errCode = printTable(CATALOG_TABLE_NAME)) != 0 )
-	{
-		cleanup();
-		exit(errCode);
-	}
-	if( (errCode = printTable(CATALOG_COLUMN_NAME)) != 0 )
-	{
-		cleanup();
-		exit(errCode);
-	}
-	if( (errCode = printTable(CATALOG_INDEX_NAME)) != 0 )
-	{
-		cleanup();
-		exit(errCode);
-	}
-
-	cout << "finished" << endl;*/
-
-	/*
-	//open all catalog files
+	//open both files
 	FileHandle tableHandle, columnHandle, indexHandle;
 	if (_rbfm->openFile(CATALOG_TABLE_NAME, tableHandle) != 0
 			|| _rbfm->openFile(CATALOG_COLUMN_NAME, columnHandle) != 0
-			|| _rbfm->openFile(CATALOG_INDEX_NAME, indexHandle) != 0) {
+			|| _rbfm->openFile(CATALOG_INDEX_NAME, indexHandle)) {
 		//abort
 		exit(-1);
 	}
@@ -392,7 +254,6 @@ void RelationManager::createCatalog()
 	indexHandle.setAccess(only_system_can_modify, success);
 	if (success == false) {
 		//abort
-		cleanup();
 		exit(-1);
 	}
 
@@ -436,7 +297,7 @@ void RelationManager::createCatalog()
 		exit(-1);
 	}
 
-	//3. Insert information about Tables, Columns, and Indexes into Table's map => {TABLE_ID, TABLE_NAME, RID}
+	//3. Insert information about Tables and Columns into Table's map => {TABLE_ID, TABLE_NAME, RID}
 	//for fast lookup -> insert <table name, table info> INTO _catalogTable
 	_catalogTable.insert(
 			std::pair<string, TableInfo>(CATALOG_TABLE_NAME,
@@ -447,6 +308,7 @@ void RelationManager::createCatalog()
 	_catalogTable.insert(
 			std::pair<string, TableInfo>(CATALOG_INDEX_NAME,
 					(TableInfo) {CATALOG_INDEX_ID, CATALOG_INDEX_NAME, ridIndex}));
+
 
 	//4. Insert record about table Tables into Columns =>
 	//		{TABLE_ID=CATALOG_TABLE_ID, COLUMN_NAME=tableDescFields[#], COLUMN_TYPE=table[#].type, COLUMN_LENGTH=table[#].length}
@@ -599,7 +461,6 @@ void RelationManager::createCatalog()
 		cleanup();
 		exit(-1);
 	}
-	*/
 }
 
 void RelationManager::insertElementsFromTableIntoMap(FileHandle tableHandle,
@@ -871,53 +732,12 @@ void RelationManager::processColumnRecordAndInsertIntoMap(const void* buffer,
 
 }
 
-void RelationManager::getCatalogDescription(const string& tableName, std::vector<Attribute>& result)
-{
-	if( strcmp(tableName.c_str(), CATALOG_TABLE_NAME) == 0 )
-	{
-		const char* tableDescFields[] = { "table-id", "table-name", "file-name" };
-		result.push_back(
-				(Attribute) {tableDescFields[0], AttrType(0), sizeof(unsigned int)});
-		result.push_back(
-				(Attribute) {tableDescFields[1], AttrType(2), MAX_SIZE_OF_NAME_IN_DB});
-		result.push_back(
-				(Attribute) {tableDescFields[2], AttrType(2), MAX_SIZE_OF_NAME_IN_DB});
-	}
-	else if( strcmp(tableName.c_str(), CATALOG_COLUMN_NAME) == 0 )
-	{
-		//prepare Column's table attributes
-		const char* columnDescFields[] = { "table-id", "column-name", "column-type",
-				"column-length", "column-status" };
-		result.push_back(
-				(Attribute) {columnDescFields[0], AttrType(0), sizeof(unsigned int)});
-		result.push_back(
-				(Attribute) {columnDescFields[1], AttrType(2), MAX_SIZE_OF_NAME_IN_DB});
-		result.push_back(
-				(Attribute) {columnDescFields[2], AttrType(0), sizeof(unsigned int)});
-		result.push_back(
-				(Attribute) {columnDescFields[3], AttrType(0), sizeof(unsigned int)});
-		result.push_back(
-				(Attribute) {columnDescFields[4], AttrType(0), sizeof(unsigned int)});
-	}
-	else if( strcmp(tableName.c_str(), CATALOG_INDEX_NAME) == 0 )
-	{
-		const char* indexDescFields[] = { "table-id", "column-name", "index-file-name" };
-		result.push_back(
-				(Attribute) {indexDescFields[0], AttrType(0), sizeof(unsigned int)});
-		result.push_back(
-				(Attribute) {indexDescFields[1], AttrType(2), MAX_SIZE_OF_NAME_IN_DB});
-		result.push_back(
-				(Attribute) {indexDescFields[2], AttrType(2), MAX_SIZE_OF_NAME_IN_DB});
-	}
-}
-
 RelationManager::RelationManager()
 {
 	_rbfm = RecordBasedFileManager::instance();
 
 	//setup the other class data-member(s)
-	//_nextTableId = CATALOG_INDEX_ID + 1;
-	_nextTableId = 1;
+	_nextTableId = 4;
 
 	//check if catalog from prior execution already exists.
 	FileHandle catalogOfTables, catalogOfColumns, catalogOfIndexes;
@@ -979,6 +799,8 @@ RelationManager::RelationManager()
 
 		insertElementsFromTableIntoMap(catalogOfColumns, column);
 
+		_nextTableId = _catalogTable.size() + 1;
+
 		//debugging
 		/*map<int, vector<ColumnInfo> >::iterator columnMapIter = _catalogColumn.begin();
 		 for( ; columnMapIter != _catalogColumn.end(); columnMapIter++ )
@@ -992,7 +814,6 @@ RelationManager::RelationManager()
 		 }
 		 std::flush(std::cout);
 		 }*/
-
 		//insert elements from the table Indexes into _catalogIndexes
 		//create list of attributes for table Indexes
 		std::vector<Attribute> index;
@@ -1007,6 +828,7 @@ RelationManager::RelationManager()
 				(Attribute) {indexDescFields[2], AttrType(2), MAX_SIZE_OF_NAME_IN_DB});
 
 		insertElementsFromTableIntoMap(catalogOfIndexes, index);
+
 	}
 
 	//debugging
@@ -1096,7 +918,7 @@ RC RelationManager::printTable(const string& tableName) {
 	//column catalog map
 	std::map<int, std::vector<ColumnInfo> >::iterator catColumnIter = _catalogColumn.begin(), catColumnEnd = _catalogColumn.end();
 
-	cout << endl << "catalog Column" << endl;
+	cout << "catalog Column" << endl;
 	for( ; catColumnIter != catColumnEnd; catColumnIter++ )
 	{
 		cout << "id: " << catColumnIter->first << endl;
@@ -1105,40 +927,8 @@ RC RelationManager::printTable(const string& tableName) {
 		{
 			cout << "\tname: " << k->_name << " ;length: " << k->_length << " ;type: " << k->_type << " ;rid: " << k->_rid.pageNum << " , " << k->_rid.slotNum << endl;
 		}
-		cout << endl;
 	}
 	cout << endl;
-
-	std::map< int, std::map<std::string, IndexInfo> >::iterator
-		catIndexIter = _catalogIndex.begin(), catIndexEnd = _catalogIndex.end();
-	cout << endl << "catalog Index" << endl;
-	for( ; catIndexIter != catIndexEnd; catIndexIter++ )
-	{
-		cout << "table id: " << catIndexIter->first << endl;
-		std::map<std::string, IndexInfo>::iterator k = catIndexIter->second.begin(), k_max = catIndexIter->second.end();
-		for( ; k != k_max; k++ )
-		{
-			cout <<
-					"column-name: " << k->first <<
-					" => index file name: " << k->second._indexName <<
-					"; RID = {" << k->second._rid.pageNum << ", " << k->second._rid.slotNum << "}" << endl;
-		}
-		cout << endl;
-	}
-	cout << endl;
-
-	cout << endl << "index files: " << endl;
-
-	attrIter = desc.begin();
-	attrMax = desc.end();
-
-	for( ; attrIter != attrMax; attrIter++ )
-	{
-		string indexName = composeIndexName(tableName, attrIter->name);
-		cout << "Index Name: " << indexName << endl;
-		printIndexFile(indexName, *attrIter);
-		cout << " ============================== " << endl;
-	}
 /*
 	//check that table entry is inside column map
 	if (catColumnIter == _catalogColumn.end()) {
@@ -1181,43 +971,24 @@ bool RelationManager::isTableExisiting(const std::string& tableName) {
 	return _catalogTable.find(tableName) != _catalogTable.end();
 }
 
-bool RelationManager::isCatalogTable(const string& name)
-{
-	const char* ptrName = name.c_str();
-
-	return strcmp(ptrName, CATALOG_COLUMN_NAME) == 0 ||
-		   strcmp(ptrName, CATALOG_TABLE_NAME) == 0 ||
-		   strcmp(ptrName, CATALOG_INDEX_NAME) == 0;
-}
-
 RC RelationManager::createTable(const string &tableName,
 		const vector<Attribute> &attrs) {
 	RC errCode = 0;
-	RID tableRid;
 
 	//checking the input arguments
 	if (tableName.length() == 0 || attrs.size() == 0) {
 		return -37; //wrong table arguments
 	}
 
-	//is this a catalog table or regular table
-	//if catalog, then do not create files, they are already in place
-	if( isCatalogTable(tableName) == false )
-	{
-		//create a regular table file
-		//make sure that the table does not exist, otherwise fail
-		if (isTableExisiting(tableName)) {
-			return -30; //attempt to re-create existing table
-		}
+	//make sure that the table does not exist, otherwise fail
+	if (isTableExisiting(tableName)) {
+		return -30; //attempt to re-create existing table
+	}
 
-		if ((errCode = _rbfm->createFile(tableName)) != 0) {
-			//return error code
-			return errCode;
-		}
-
-		_catalogTable.insert(
-				std::pair<string, TableInfo>(CATALOG_TABLE_NAME,
-						(TableInfo) {CATALOG_TABLE_ID, CATALOG_TABLE_NAME, tableRid}));
+	//create file for the table
+	if ((errCode = _rbfm->createFile(tableName)) != 0) {
+		//return error code
+		return errCode;
 	}
 
 	//open catalog table's TABLE
@@ -1246,6 +1017,7 @@ RC RelationManager::createTable(const string &tableName,
 		id = _nextTableId++;
 	}
 
+	//insert record (tuple) into catalog Table's table
 
 	//setup record descriptor for catalog table
 	std::vector<Attribute> desc;
@@ -1256,6 +1028,9 @@ RC RelationManager::createTable(const string &tableName,
 		return errCode;
 	}
 
+	//maintain record identifier for the element inserted into table Tables
+	RID tableRid;
+
 	//insert new record into table Tables
 	if ((errCode = createRecordInTables(tableHandle, desc, tableName.c_str(),
 			id, tableRid)) != 0) {
@@ -1265,8 +1040,10 @@ RC RelationManager::createTable(const string &tableName,
 		return errCode;
 	}
 
-	//modify entry in catalogTable => change RID
-	_catalogTable[tableName]._rid = (RID){tableRid.pageNum, tableRid.slotNum};
+	//insert an entry into _catalogTable
+	_catalogTable.insert(
+			std::pair<string, TableInfo>(tableName,
+					(TableInfo) {id, tableName, tableRid}));
 
 	//close table handle
 	if ((errCode = _rbfm->closeFile(tableHandle)) != 0) {
@@ -1274,8 +1051,9 @@ RC RelationManager::createTable(const string &tableName,
 		return errCode;
 	}
 
-	//open catalogs table Columns & table Indexes
+	//open catalog table Columns
 	FileHandle columnHandle;
+
 	if ((errCode = _rbfm->openFile(CATALOG_COLUMN_NAME, columnHandle)) != 0) {
 		//return error code
 		return errCode;
@@ -1290,7 +1068,6 @@ RC RelationManager::createTable(const string &tableName,
 		return errCode;
 	}
 
-	//each new table's attribute needs to be inserted into catalog Column table
 	std::vector<ColumnInfo> tableInfo;
 	std::vector<Attribute>::const_iterator i = attrs.begin(), max = attrs.end();
 	for (; i != max; i++) {
@@ -1308,24 +1085,15 @@ RC RelationManager::createTable(const string &tableName,
 		//create column information entry
 		tableInfo.push_back(
 				(ColumnInfo) {(*i).name, (*i).type, (*i).length, 0, columnRid});
-
-		//create file and update information stored in catalog and local index map
-		if( (errCode = createIndex(tableName, i->name)) != 0 )
-		{
-			_rbfm->destroyFile(tableName);
-			_rbfm->closeFile(columnHandle);
-			return errCode;
-		}
 	}
 
 	//close column handle
 	if ((errCode = _rbfm->closeFile(columnHandle)) != 0) {
 		//fail
 		_rbfm->destroyFile(tableName);
+		_rbfm->closeFile(columnHandle);
 		return errCode;
 	}
-
-	//printTable(CATALOG_INDEX_NAME);
 
 	//for fast lookup -> insert <table id, list of column info> for TABLE INTO _catalogColumn
 	_catalogColumn.insert(
@@ -1338,6 +1106,15 @@ RC RelationManager::createTable(const string &tableName,
 std::string RelationManager::composeIndexName(const string& tableName, const string& columnName)
 {
 	return tableName + "_" + columnName + "_";
+}
+
+bool RelationManager::isCatalogTable(const string& name)
+{
+	const char* ptrName = name.c_str();
+
+	return strcmp(ptrName, CATALOG_COLUMN_NAME) == 0 ||
+		   strcmp(ptrName, CATALOG_TABLE_NAME) == 0 ||
+		   strcmp(ptrName, CATALOG_INDEX_NAME) == 0;
 }
 
 RC RelationManager::createIndex(const string& tableName, const string& attributeName)
@@ -1353,6 +1130,22 @@ RC RelationManager::createIndex(const string& tableName, const string& attribute
 	{
 		//fail
 		return -31; //accessing table that does not exists
+	}
+
+	//determine table id
+	unsigned int id = tableIter->second._id;
+
+	//if entry with this table id does not exist, then create one
+	if( _catalogIndex.find(id) == _catalogIndex.end() )
+	{
+		_catalogIndex.insert( std::pair<int, std::map<std::string, IndexInfo> >(id, std::map<std::string, IndexInfo>() ) );
+	}
+
+	//check if index already exists
+	if( _catalogIndex[id].find(attributeName) != _catalogIndex[id].end() )
+	{
+		//index already exists
+		return -38;
 	}
 
 	FileHandle indexesHandle;
@@ -1377,13 +1170,9 @@ RC RelationManager::createIndex(const string& tableName, const string& attribute
 			return errCode;
 		}
 	}
-
-	//open actual index file
-	IXFileHandle ixFileHandle;
-	if( (errCode = ix->openFile(indexName, ixFileHandle)) != 0 )
+	else
 	{
-		_rbfm->closeFile(indexesHandle);
-		return errCode;
+		return -100;
 	}
 
 	//setup record descriptor for catalog index
@@ -1392,27 +1181,14 @@ RC RelationManager::createIndex(const string& tableName, const string& attribute
 	if ((errCode = getAttributes(CATALOG_INDEX_NAME, desc)) != 0) {
 		//fail
 		_rbfm->closeFile(indexesHandle);
-		ix->closeFile(ixFileHandle);
 		return errCode;
 	}
-
-	//determine table id
-	unsigned int id = tableIter->second._id;
 
 	//insert record into Indexes table
 	if( (errCode = createRecordInIndexes(indexesHandle, desc, id, attributeName.c_str(), indexName.c_str(), indexesRid)) != 0 )
 	{
 		_rbfm->closeFile(indexesHandle);
-		ix->closeFile(ixFileHandle);
 		return errCode;
-	}
-
-	//printTable(CATALOG_INDEX_NAME);
-
-	//if entry with this table id does not exist, then create one
-	if( _catalogIndex.find(id) == _catalogIndex.end() )
-	{
-		_catalogIndex.insert( std::pair<int, std::map<std::string, IndexInfo> >(id, std::map<std::string, IndexInfo>() ) );
 	}
 
 	//insert entry into Indexes table map
@@ -1424,15 +1200,80 @@ RC RelationManager::createIndex(const string& tableName, const string& attribute
 	//insert index info for the specified attribute name into index catalog
 	_catalogIndex[id].insert( std::pair<std::string, IndexInfo>(attributeName, info) );
 
-	if( (errCode = ix->closeFile(ixFileHandle)) != 0 )
+	//close column handle
+	if ((errCode = _rbfm->closeFile(indexesHandle)) != 0) {
+		//fail
+		return errCode;
+	}
+
+	//open actual index file
+	IXFileHandle ixFileHandle;
+	if( (errCode = ix->openFile(indexName, ixFileHandle)) != 0 )
 	{
 		_rbfm->closeFile(indexesHandle);
 		return errCode;
 	}
 
-	//close column handle
-	if ((errCode = _rbfm->closeFile(indexesHandle)) != 0) {
+	//find the attribute that we need to index
+	desc.clear();
+	if ((errCode = getAttributes(tableName, desc)) != 0) {
 		//fail
+		_rbfm->closeFile(indexesHandle);
+		return errCode;
+	}
+	Attribute attribute;
+	int indexAttr = 0;
+	for( ; indexAttr < (int)desc.size(); indexAttr++ )
+	{
+		if( desc[indexAttr].name == attributeName )
+		{
+			attribute.length = desc[indexAttr].length;
+			attribute.name = desc[indexAttr].name;
+			attribute.type = desc[indexAttr].type;
+			break;
+		}
+	}
+
+	//scan thru existing table and insert elements into the index
+	RM_ScanIterator iterator;
+	string condAttribute;
+	vector<string> selAttr;
+	selAttr.push_back(attributeName);
+	if( (errCode = scan(tableName, condAttribute, NO_OP, NULL, selAttr, iterator)) != 0 )
+	{
+		_rbfm->closeFile(indexesHandle);
+		return errCode;
+	}
+
+	//allocate buffer for scanning
+	void* dataBuf = malloc(PAGE_SIZE);
+	memset(dataBuf, 0, PAGE_SIZE);
+	RID rid = {0, 0};
+
+	while (iterator.getNextTuple(rid, dataBuf) == 0)
+	{
+		//dataBuf is entire record => but we need a key (one of fields in this record)
+		//since index does not store whole record but only <key, RID>
+
+		//find attribute in the record
+		unsigned int offsetToCurrentAttrValue = getOffset(dataBuf, desc, indexAttr);
+		char* key = (char*)dataBuf + offsetToCurrentAttrValue;
+
+		//go ahead and insert index entry
+		if ( (errCode = ix->insertEntry(ixFileHandle, attribute, key, rid)) != 0)
+		{
+			iterator.close();
+			_rbfm->closeFile(indexesHandle);
+			return errCode;
+		}
+	}
+
+	iterator.close();
+	free(dataBuf);
+
+	if( (errCode = ix->closeFile(ixFileHandle)) != 0 )
+	{
+		_rbfm->closeFile(indexesHandle);
 		return errCode;
 	}
 
@@ -1466,7 +1307,7 @@ RC RelationManager::deleteTable(const string &tableName) {
 	//fast access for table information
 	TableInfo info = (*tableIter).second;
 
-	//1. remove record inside Tables
+	//1, remove record inside Tables
 	//find and remove record inside the table Tables for this table
 	if ((errCode = deleteTuple(CATALOG_TABLE_NAME, info._rid)) != 0) {
 		//fail
@@ -1503,30 +1344,10 @@ RC RelationManager::deleteTable(const string &tableName) {
 		}
 	}
 
-	//4. modify catalog index
-	std::map<int, std::map<std::string, IndexInfo> >::iterator
-		indexesIter = _catalogIndex.find(info._id);
-	if( indexesIter != _catalogIndex.end() )
-	{
-		//loop thru all attributes of the table
-		std::map<std::string, IndexInfo>::iterator i = indexesIter->second.begin(), max = indexesIter->second.end();
-		for( ; i != max; i++ )
-		{
-			if( (errCode = destroyIndex(tableName, i->first)) != 0 )
-			{
-				//fail
-				return errCode;
-			}
-		}
-
-		//remove current entry from the local Indexes map
-		_catalogIndex.erase(indexesIter);
-	}
-
 	//include unoccupied rid into the free list
 	_freeTableIds.push(info._id);
 
-	//6. remove entries from both maps corresponding to tables Tables and Columns
+	//4. remove entries from both maps corresponding to tables Tables and Columns
 	_catalogTable.erase(tableIter);
 	_catalogColumn.erase(columnIter);
 
@@ -1580,14 +1401,6 @@ RC RelationManager::getAttributes(const string &tableName,
 	RC errCode = 0;
 	if (tableName.empty())
 		return -37; //tableName no valid
-
-	//if it is one of the catalog tables, then
-	if( isCatalogTable(tableName) == true )
-	{
-		//simply get the description from here
-		getCatalogDescription(tableName, attrs);
-		return errCode;
-	}
 
 	//check if the table exist in the map
 	if (_catalogTable.find(tableName) == _catalogTable.end()) {
@@ -1683,25 +1496,40 @@ RC RelationManager::insertIXEntry(const string& tableName, const std::vector<Att
 	RC errCode = 0;
 
 	//get table id (since catalog Index has such outer key
-	//int tableId = _catalogTable[tableName]._id;
-
-	//find index corresponding to this table
-	//std::map<int, std::map<std::string, IndexInfo> >::iterator indexIter = _catalogIndex.find(tableId);
-
-	//setup iterators for vector of attributes
-	int i = 0, max = (int)attrs.size();
+	int tableId = _catalogTable[tableName]._id;
 
 	IndexManager* ix = IndexManager::instance();
 
-	//iterate over the list of attributes
-	for( ; i < max; i++ )
-	{
-		//current attribute
-		Attribute curAttr = attrs[i];
+	//iterate over ONLY those attributes that were indexed
 
-		//find tuple <attributeName, IndexInfo> inside the catalog Indexes corresponding to this attribute
-		//std::map<std::string, IndexInfo>::iterator attrIter = indexIter->second.find( curAttr.name );
-		//string name = attrIter->second._indexName;
+	//setup iterators for looping thru indexed attributes
+	std::map<int, std::map<std::string, IndexInfo> >::iterator
+		indexIter = _catalogIndex.find(tableId);
+
+	if( indexIter == _catalogIndex.end() )
+	{
+		return 0;	//no indexes to update, so just return
+	}
+
+	std::map<std::string, IndexInfo>::iterator
+		i = indexIter->second.begin(), max = indexIter->second.end();
+
+	for( ; i != max; i++ )
+	{
+		//determine current attribute
+		Attribute curAttr;
+		int indexAttr = 0;
+		for(; indexAttr < (int)attrs.size(); indexAttr++)
+		{
+			if( attrs[indexAttr].name == i->first )
+			{
+				curAttr.length = attrs[indexAttr].length;
+				curAttr.name = attrs[indexAttr].name;
+				curAttr.type = attrs[indexAttr].type;
+				break;
+			}
+		}
+
 		string name = composeIndexName(tableName, curAttr.name);
 		IXFileHandle ixHandle;
 
@@ -1713,7 +1541,7 @@ RC RelationManager::insertIXEntry(const string& tableName, const std::vector<Att
 		}
 
 		//find attribute in the record
-		unsigned int offsetToCurrentAttrValue = getOffset(data, attrs, i);
+		unsigned int offsetToCurrentAttrValue = getOffset(data, attrs, indexAttr);
 		char* key = (char*)data + offsetToCurrentAttrValue;
 
 		//insert entry into IX component
@@ -1745,12 +1573,6 @@ RC RelationManager::insertTuple(const string &tableName, const void *data,
 	if (tableName.empty() || data == NULL)
 		return -37;
 
-	//check whether table exists in local Table catalog map
-	if( _catalogTable.find(tableName) == _catalogTable.end() )
-	{
-		return -31;	//accessing/modifying/deleting table that does not exist
-	}
-
 	vector<Attribute> attrs;
 	//get the attributes for this table
 	if ((errCode = getAttributes(tableName, attrs)) != 0) {
@@ -1763,7 +1585,7 @@ RC RelationManager::insertTuple(const string &tableName, const void *data,
 	if ((errCode = _rbfm->openFile(tableName, fileHandle)) != 0)
 		return errCode;
 
-	//insert the record into RBFM component
+	//insert the record
 	if ((errCode = _rbfm->insertRecord(fileHandle, attrs, data, rid)) != 0)
 	{
 		//close file
@@ -1794,12 +1616,6 @@ RC RelationManager::deleteTuples(const string &tableName) {
 	if (tableName.empty())
 		return -37;
 
-	//check whether table exists in local Table catalog map
-	if( _catalogTable.find(tableName) == _catalogTable.end() )
-	{
-		return -31;	//accessing/modifying/deleting table that does not exist
-	}
-
 	FileHandle tableHandle;
 
 	//open file that contains table tuples
@@ -1824,10 +1640,16 @@ RC RelationManager::deleteTuples(const string &tableName) {
 	IndexManager* ix = IndexManager::instance();
 
 	//get table id (since catalog Index has such outer key
-	//int tableId = _catalogTable[tableName]._id;
+	int tableId = _catalogTable[tableName]._id;
 
 	//find index corresponding to this table
-	//std::map<int, std::map<std::string, IndexInfo> >::iterator indexIter = _catalogIndex.find(tableId);
+	std::map<int, std::map<std::string, IndexInfo> >::iterator
+		indexIter = _catalogIndex.find(tableId);
+
+	if( indexIter == _catalogIndex.end() )
+	{
+		return errCode;	//if this table has no indexes, then just leave
+	}
 
 	vector<Attribute> attrs;
 	//get the attributes for this table
@@ -1837,14 +1659,25 @@ RC RelationManager::deleteTuples(const string &tableName) {
 		return errCode;
 	}
 
-	//setup iterators for vector of attributes
-	int i = 0, max = (int)attrs.size();
+	std::map<std::string, IndexInfo>::iterator
+		k = indexIter->second.begin(), kmax = indexIter->second.end();
 
-	//iterate over the list of attributes
-	for( ; i < max; i++ )
+	//iterate over the list of indexed attributes
+	for( ; k != kmax; k++ )
 	{
-		//current attribute
-		Attribute curAttr = attrs[i];
+		//determine current attribute
+		Attribute curAttr;
+		int indexAttr = 0;
+		for(; indexAttr < (int)attrs.size(); indexAttr++)
+		{
+			if( attrs[indexAttr].name == k->first )
+			{
+				curAttr.length = attrs[indexAttr].length;
+				curAttr.name = attrs[indexAttr].name;
+				curAttr.type = attrs[indexAttr].type;
+				break;
+			}
+		}
 
 		//find tuple <attributeName, IndexInfo> inside the catalog Indexes corresponding to this attribute
 		//std::map<std::string, IndexInfo>::iterator attrIter = indexIter->second.find( curAttr.name );
@@ -1880,15 +1713,19 @@ RC RelationManager::deleteTuples(const string &tableName) {
 	    		//fail
 	    		ix_ScanIterator.close();
 				ix->closeFile(ixHandle);
+				free(key);
 	    		return errCode;
 	    	}
 	    }
+
+	    ix_ScanIterator.close();
+	    free(key);
 
 		//close IX files
 		if( (errCode = ix->closeFile(ixHandle)) != 0 )
 		{
 			//fail
-			ix->closeFile(ixHandle);
+			free(key);
 			return errCode;
 		}
 	}
@@ -1901,23 +1738,40 @@ RC RelationManager::deleteIXEntry(const string& tableName, const std::vector<Att
 {
 	RC errCode = 0;
 
-	//now ready to delete item inside IX component
 	//get table id (since catalog Index has such outer key
-	//int tableId = _catalogTable[tableName]._id;
-
-	//find index corresponding to this table
-	//std::map<int, std::map<std::string, IndexInfo> >::iterator indexIter = _catalogIndex.find(tableId);
-
-	//setup iterators for vector of attributes
-	int i = 0, max = (int)attrs.size();
+	int tableId = _catalogTable[tableName]._id;
 
 	IndexManager* ix = IndexManager::instance();
 
-	//iterate over the list of attributes
-	for( ; i < max; i++ )
+	//iterate over ONLY those attributes that were indexed
+
+	//setup iterators for looping thru indexed attributes
+	std::map<int, std::map<std::string, IndexInfo> >::iterator
+		indexIter = _catalogIndex.find(tableId);
+
+	if( indexIter == _catalogIndex.end() )
 	{
-		//current attribute
-		Attribute curAttr = attrs[i];
+		return 0;	//no indexes to update, so just return
+	}
+
+	std::map<std::string, IndexInfo>::iterator
+		i = indexIter->second.begin(), max = indexIter->second.end();
+
+	for( ; i != max; i++ )
+	{
+		//determine current attribute
+		Attribute curAttr;
+		int indexAttr = 0;
+		for(; indexAttr < (int)attrs.size(); indexAttr++)
+		{
+			if( attrs[indexAttr].name == i->first )
+			{
+				curAttr.length = attrs[indexAttr].length;
+				curAttr.name = attrs[indexAttr].name;
+				curAttr.type = attrs[indexAttr].type;
+				break;
+			}
+		}
 
 		//find tuple <attributeName, IndexInfo> inside the catalog Indexes corresponding to this attribute
 		//std::map<std::string, IndexInfo>::iterator attrIter = indexIter->second.find( curAttr.name );
@@ -1933,7 +1787,7 @@ RC RelationManager::deleteIXEntry(const string& tableName, const std::vector<Att
 		}
 
 		//find attribute in the record
-		unsigned int offsetToCurrentAttrValue = getOffset(data, attrs, i);
+		unsigned int offsetToCurrentAttrValue = getOffset(data, attrs, indexAttr);
 		char* key = (char*)data + offsetToCurrentAttrValue;
 
 		//insert entry into IX component
@@ -1963,12 +1817,6 @@ RC RelationManager::deleteTuple(const string &tableName, const RID &rid) {
 	if (tableName.empty() || rid.pageNum == 0)
 		return -37;
 
-	//check whether table exists in local Table catalog map
-	if( _catalogTable.find(tableName) == _catalogTable.end() )
-	{
-		return -31;	//accessing/modifying/deleting table that does not exist
-	}
-
 	vector<Attribute> attrs;
 	//get the attributes for this table
 	if ((errCode = getAttributes(tableName, attrs)) != 0) {
@@ -1990,14 +1838,17 @@ RC RelationManager::deleteTuple(const string &tableName, const RID &rid) {
 	if ((errCode = _rbfm->readRecord(fileHandle, attrs, rid, data)) != 0)
 	{
 		_rbfm->closeFile(fileHandle);
+		free(data);
 		return errCode;
 	}
 
 	if( (errCode = deleteIXEntry(tableName, attrs, data, rid)) != 0 )
 	{
 		_rbfm->closeFile(fileHandle);
+		free(data);
 		return errCode;
 	}
+	free(data);
 
 	//delete the record
 	if ((errCode = _rbfm->deleteRecord(fileHandle, attrs, rid)) != 0)
@@ -2006,9 +1857,8 @@ RC RelationManager::deleteTuple(const string &tableName, const RID &rid) {
 		return errCode;
 	}
 
-	errCode = _rbfm->closeFile(fileHandle);
+	_rbfm->closeFile(fileHandle);
 
-	//success
 	return errCode;
 }
 
@@ -2018,12 +1868,6 @@ RC RelationManager::updateTuple(const string &tableName, const void *data,
 	//check if there is inconsistent data
 	if (tableName.empty() || data == NULL || rid.pageNum == 0)
 		return -37;
-
-	//check whether table exists in local Table catalog map
-	if( _catalogTable.find(tableName) == _catalogTable.end() )
-	{
-		return -31;	//accessing/modifying/deleting table that does not exist
-	}
 
 	vector<Attribute> attrs;
 	//get the attributes for this table
@@ -2472,9 +2316,9 @@ RC RelationManager::indexScan(const string &tableName,
 	}
 
 	//determine index name
-	std::map<std::string, IndexInfo>::iterator attrIter = indexIter->second.find( attributeName );
+	//std::map<std::string, IndexInfo>::iterator attrIter = indexIter->second.find( attributeName );
 
-	string name = attrIter->second._indexName;
+	string name = composeIndexName(tableName, attributeName);
 	IndexManager* ix = IndexManager::instance();
 	IXFileHandle ixHandle;
 
@@ -2521,3 +2365,4 @@ RC RM_IndexScanIterator::close()
 {
 	return _iterator.close();
 }
+
