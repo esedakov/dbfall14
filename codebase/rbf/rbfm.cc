@@ -1731,10 +1731,10 @@ RC	RBFM_ScanIterator::getNextRecord(RID &rid, void* data)
 				break;
 			case TypeVarChar:
 				//setup size of field as integer
-				szOfField = ((unsigned int*)curRecord)[0];
+				szOfField = ((unsigned int*)curRecord)[0] + sizeof(unsigned int);
 
 				//skip the size and go to the character array
-				ptrField = (void*)( (char*)ptrField + sizeof(int) );
+				//ptrField = (void*)( (char*)ptrField );//+ sizeof(int) );
 				break;
 			}
 
@@ -1749,7 +1749,10 @@ RC	RBFM_ScanIterator::getNextRecord(RID &rid, void* data)
 					int cmpValue = 0;
 					if( i->type == TypeVarChar )
 					{
-						cmpValue = strncmp((char*)ptrField, (char*)_value, szOfField);
+						if( ((unsigned int*)ptrField)[0] == ((unsigned int*)_value)[0] )
+							cmpValue = strncmp((char*)ptrField, (char*)_value, szOfField);
+						else
+							cmpValue = ((unsigned int*)ptrField)[0] < ((unsigned int*)_value)[0] ? -1 : 1;
 					}
 					else
 					{
