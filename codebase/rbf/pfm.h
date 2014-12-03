@@ -42,7 +42,7 @@ public:
     static PagedFileManager* instance();                     // Access to the _pf_manager instance
 
     bool isExisting(const char *fileName)	const;
-
+    RC getNumOpenInstances(const char* fileName);
     RC createFile    (const char *fileName);                         // Create a new file
     RC createFileHeader(const char* fileName);
     RC destroyFile   (const char *fileName);                         // Destroy a file

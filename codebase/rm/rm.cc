@@ -260,7 +260,7 @@ void RelationManager::createCatalog()
 	//1. insert record about table Tables into Tables => {TABLE_ID=1, TABLE_NAME="Tables", FILE_NAME="Tables"}
 	//Tables table with the following attributes (table-id, table-name, file-name)
 	std::vector<Attribute> table;
-	const char* tableDescFields[] = { "table-id", "table-name", "file-name" };
+	const char* tableDescFields[] = { "table_id", "table_name", "file_name" };
 
 	table.push_back(
 			(Attribute) {tableDescFields[0], AttrType(0), sizeof(unsigned int)});
@@ -315,8 +315,8 @@ void RelationManager::createCatalog()
 	//compose and insert COLUMN records for TABLES table
 	//Columns table with the following attributes (table-id, column-name, column-type, column-length)
 	std::vector<Attribute> column;
-	const char* columnDescFields[] = { "table-id", "column-name", "column-type",
-			"column-length", "column-status" };
+	const char* columnDescFields[] = { "table_id", "column_name", "column_type",
+			"column_length", "column_status" };
 	column.push_back(
 			(Attribute) {columnDescFields[0], AttrType(0), sizeof(unsigned int)});
 	column.push_back(
@@ -404,7 +404,7 @@ void RelationManager::createCatalog()
 
 	//8. Indexes table with the following attributes (table-id, column-name, index-file-name)
 	std::vector<Attribute> index;
-	const char* indexDescFields[] = { "table-id", "column-name", "index-file-name" };
+	const char* indexDescFields[] = { "table_id", "column_name", "index_file_name" };
 	index.push_back(
 			(Attribute) {indexDescFields[0], AttrType(0), sizeof(unsigned int)});
 	index.push_back(
@@ -760,7 +760,7 @@ RelationManager::RelationManager()
 		//create list of attributes for table Tables
 		std::vector<Attribute> table;
 		const char* tableDescFields[] =
-				{ "table-id", "table-name", "file-name" };
+				{ "table_id", "table_name", "file_name" };
 
 		table.push_back(
 				(Attribute) {tableDescFields[0], AttrType(0), sizeof(unsigned int)});
@@ -784,8 +784,8 @@ RelationManager::RelationManager()
 		//insert elements from the table Columns into _catalogColumn
 		//create list of attributes for table Columns
 		std::vector<Attribute> column;
-		const char* columnDescFields[] = { "table-id", "column-name",
-				"column-type", "column-length", "column-status" };
+		const char* columnDescFields[] = { "table_id", "column_name",
+				"column_type", "column_length", "column_status" };
 		column.push_back(
 				(Attribute) {columnDescFields[0], AttrType(0), sizeof(unsigned int)});
 		column.push_back(
@@ -818,7 +818,7 @@ RelationManager::RelationManager()
 		//create list of attributes for table Indexes
 		std::vector<Attribute> index;
 		const char* indexDescFields[] =
-				{ "table-id", "column-name", "index-file-name" };
+				{ "table_id", "column_name", "index_file_name" };
 
 		index.push_back(
 				(Attribute) {indexDescFields[0], AttrType(0), sizeof(unsigned int)});
@@ -2202,8 +2202,8 @@ RC RelationManager::addAttribute(const string &tableName,
 
 	//setup the descriptor for Columns (my bad, not exactly the smartest parameter for the function that inserts record into table Columns...)
 	std::vector<Attribute> column;
-	const char* columnDescFields[] = { "table-id", "column-name", "column-type",
-			"column-length", "column-status" };
+	const char* columnDescFields[] = { "table_id", "column_name", "column_type",
+			"column_length", "column_status" };
 	column.push_back(
 			(Attribute) {columnDescFields[0], AttrType(0), sizeof(unsigned int)});
 	column.push_back(

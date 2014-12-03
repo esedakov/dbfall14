@@ -520,11 +520,11 @@ RC PagedFileManager::destroyFile(const char *fileName)
 		return -4;	//cannot delete, because this file does not exist
 	}
 
-	//make sure that file to be deleted is not opened/used
-	if( iter->second._numOpen != 0 )
-	{
-		return -5;	//attempting to delete an opened file
-	}
+	//make sure that file to be deleted is not opened/used (TableScan.dtor)
+	//if( iter->second._numOpen != 0 )
+	//{
+	//	return -5;	//attempting to delete an opened file
+	//}
 
 	//remove file from FileSystem
 	if( remove(fileName) != 0 )
@@ -535,6 +535,23 @@ RC PagedFileManager::destroyFile(const char *fileName)
 
 	//destruction of a file was successful, return 0
 	return 0;
+}
+
+RC PagedFileManager::getNumOpenInstances(const char* fileName)
+{
+	RC errCode = 0;
+
+	std::map<std::string, FileInfo>::iterator iter;
+	if( ( iter = _files.find(std::string(fileName)) ) != _files.end() )
+	{
+		printf("file named: %s => # opens: %i\n", fileName, (int)iter->second._numOpen);
+	}
+	else
+	{
+		printf("No such entry");
+	}
+
+	return errCode;
 }
 
 RC PagedFileManager::openFile(const char *fileName, FileHandle &fileHandle)
