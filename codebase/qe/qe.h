@@ -5,6 +5,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
+#include <iostream>
 
 #include "../rbf/rbfm.h"
 #include "../rm/rm.h"
@@ -60,6 +61,7 @@ class TableScan : public Iterator
 
         TableScan(RelationManager &rm, const string &tableName, const char *alias = NULL):rm(rm)
         {
+        	//PagedFileManager::instance()->getNumOpenInstances("employee"); cout << "::start::TableScan" << endl;
         	//Set members
         	this->tableName = tableName;
 
@@ -80,24 +82,30 @@ class TableScan : public Iterator
 
             // Set alias
             if(alias) this->tableName = alias;
+            //PagedFileManager::instance()->getNumOpenInstances("employee"); cout << "::end::TableScan" << endl;
         };
 
         // Start a new iterator given the new compOp and value
         void setIterator()
         {
+        	//PagedFileManager::instance()->getNumOpenInstances("employee"); cout << "::start::setIterator" << endl;
             iter->close();
             delete iter;
             iter = new RM_ScanIterator();
             rm.scan(tableName, "", NO_OP, NULL, attrNames, *iter);
+            //PagedFileManager::instance()->getNumOpenInstances("employee"); cout << "::end::setIteraror" << endl;
         };
 
         RC getNextTuple(void *data)
         {
+        	//PagedFileManager::instance()->getNumOpenInstances("employee"); cout << "::start::getNextTuple" << endl;
             return iter->getNextTuple(rid, data);
+            //PagedFileManager::instance()->getNumOpenInstances("employee"); cout << "::end::getNextTuple" << endl;
         };
 
         void getAttributes(vector<Attribute> &attrs) const
         {
+        	//PagedFileManager::instance()->getNumOpenInstances("employee"); cout << "::start::getAttributes" << endl;
             attrs.clear();
             attrs = this->attrs;
             unsigned i;
@@ -110,11 +118,14 @@ class TableScan : public Iterator
                 tmp += attrs[i].name;
                 attrs[i].name = tmp;
             }
+            //PagedFileManager::instance()->getNumOpenInstances("employee"); cout << "::end::getAttributes" << endl;
         };
 
         ~TableScan()
         {
+        	//PagedFileManager::instance()->getNumOpenInstances("employee"); cout << "::start::dtor" << endl;
         	iter->close();
+        	//PagedFileManager::instance()->getNumOpenInstances("employee"); cout << "::end::dtor" << endl;
         };
 };
 
@@ -312,6 +323,31 @@ class Aggregate : public Iterator {
         // E.g. Relation=rel, attribute=attr, aggregateOp=MAX
         // output attrname = "MAX(rel.attr)"
         void getAttributes(vector<Attribute> &attrs) const;
+    private:
+        void determineOutputType(AttrType& type, int& size);
+        RC getOffsetToProperField(const void* record, const vector<Attribute> recordDesc, const Attribute properField, int& offset);
+        string generateOpName();
+        string generatePartitionName(unsigned int partitionNumber);
+        RC next_groupBy(void* data);
+        RC next_basic(void* data);
+        RC nextBucket();
+        //data member used solely by basic aggregation
+        bool _isFinishedProcessing;	//for basic aggregate this becomes true after the first iteration
+        //data members used solely for group-by aggregation
+        Attribute _groupByAttr;
+        unsigned int _numOfPartitions;
+        vector<Attribute> _groupByDesc;
+        vector<string> _groupByNames;
+        RBFM_ScanIterator _groupByIterator;
+        FileHandle _groupByHandle;
+        int _groupByCurrentBucketNumber;
+        //shared data members between group-by and basic aggregations
+        vector<Attribute> _attributes;
+        Iterator* _inputStream;
+        bool _isGroupByAggregation;
+        Attribute _aggAttr;
+        AggregateOp _aggOp;
+        vector<Attribute> _inputStreamDesc;
 };
 
 #endif

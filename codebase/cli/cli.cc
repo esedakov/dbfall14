@@ -7,6 +7,7 @@
 // Command parsing delimiters
 // TODO: update delimiters later
 #define DELIMITERS " ,()\""
+#define DATABASE_FOLDER "/home/esedakov/cs222_workspace/cs222/src/cli/"
 
 // CVS file read delimiters
 #define CVS_DELIMITERS ","
@@ -64,7 +65,8 @@ CLI::CLI()
 
   // add cli catalog attributes to CLI_COLUMNS table
   for(uint i=0; i < column_attrs.size(); i ++) {
-    this->addAttributeToCatalog(column_attrs[i], CLI_COLUMNS, i);
+	  Attribute a = column_attrs[i];
+    this->addAttributeToCatalog(a, CLI_COLUMNS, i);
   }
 
   // create CLI_TABLES table
@@ -89,7 +91,8 @@ CLI::CLI()
 
   // add cli catalog attributes to cli columns table
   for(uint i=0; i < table_attrs.size(); i ++) {
-    this->addAttributeToCatalog(table_attrs[i], CLI_TABLES, i);
+	  Attribute a = table_attrs[i];
+    this->addAttributeToCatalog(a, CLI_TABLES, i);
   }
 
   // add cli catalog information to itself
@@ -128,7 +131,8 @@ CLI::CLI()
 
   // add cli index attributes to cli columns table
   for(uint i=0; i < index_attr.size(); i ++) {
-    this->addAttributeToCatalog(index_attr[i], CLI_INDEXES, i);
+	  Attribute a = index_attr[i];
+    this->addAttributeToCatalog(a, CLI_INDEXES, i);
   }
 
   // add cli catalog information to itself
@@ -178,7 +182,7 @@ RC CLI::start()
   return 0;
 }
 
-RC CLI::process(const string input)
+RC CLI::process(const std::string input)
 {
   // convert input to char *
   RC code = 0;
@@ -1177,7 +1181,7 @@ RC CLI::load()
 
   // read file
   ifstream ifs;
-  string file_url = DATABASE_FOLDER"../data/" + fileName;
+  string file_url = DATABASE_FOLDER "../data/" + fileName;
   ifs.open (file_url, ifstream::in);
 
   if (!ifs.is_open())

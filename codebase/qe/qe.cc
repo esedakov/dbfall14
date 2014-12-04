@@ -401,7 +401,10 @@ Aggregate::Aggregate(Iterator *input, Attribute aggAttr, AggregateOp op) {
 	AttrType type;
 	int size;
 	determineOutputType(type, size);
-	_attributes.push_back( (Attribute){ generateOpName() + "()" /*"(" + _aggAttr.name + ")"*/, type, size} );
+	_attributes.push_back
+		( (Attribute){ generateOpName() + "()" /*"(" + _aggAttr.name + ")"*/, type, (unsigned int)size} );
+	//determine type of records that this input stream will supply
+	_inputStream->getAttributes(_inputStreamDesc);
 	//set the group-by aggregation data members to default values (they will not be used)
 	_groupByAttr = (Attribute){"", TypeInt, 0};
 	_numOfPartitions = 0;
@@ -428,6 +431,11 @@ void Aggregate::determineOutputType(AttrType& type, int& size)
 	}
 }
 
+string Aggregate::generatePartitionName(unsigned int partitionNumber)
+{
+	return _aggAttr.name + "__" +  _groupByAttr.name + "__" + to_string(partitionNumber);
+}
+
 // Optional for everyone. 5 extra-credit points
 // Group-based hash aggregation
 Aggregate::Aggregate(Iterator *input, Attribute aggAttr, Attribute groupAttr,
@@ -441,14 +449,339 @@ Aggregate::Aggregate(Iterator *input, Attribute aggAttr, Attribute groupAttr,
 	int size;
 	determineOutputType(type, size);
 	_attributes.push_back
-		( (Attribute){ generateOpName() + "(" + _groupByAttr.name + ")", type, size } );
+		( (Attribute){ generateOpName() + "(" + _groupByAttr.name + ")", type, (unsigned int)size } );
+	//determine type of records that this input stream will supply
+	_inputStream->getAttributes(_inputStreamDesc);
+	_isFinishedProcessing = false;
+
+	/*
+	 * So the basic algorithm is outlined in lecture 11, slide # 14
+	 * The idea is to scan (iterate) over the records and perform couple of things on the fly with them:
+	 * 	1. hash the group field of the record to determine the bucket to which one it belongs
+	 * 	2. load in the bucket and scan thru it to find the entry (if such entry in bucket exists)
+	 * 	   that represents current operator status (MAX or MIN or SUM or COUNT or AVG).
+	 * 	   The status includes (just like on the diagram in that lecture):
+	 * 	   	< group-by attribute , operator's current values >
+	 * 	   	Operator's current values:
+	 * 	   		MAX, MIN, SUM => _aggAttr.type
+	 * 	   		COUNT => integer
+	 * 	   		AVG => < _aggAttr.type , integer >
+	 *  3 If entry exists => update it
+	 *    If such entry does not exist => insert it with the given _aggAttr values in place of operator's values
+	 */
+
 	//set data members specifically used in group-by aggregation
 	_groupByAttr = groupAttr;
 	_numOfPartitions = numPartitions;
-	//set default value for is finished processing, since it will not be used here
-	_isFinishedProcessing = false;
+	//group-by attribute
+	_groupByDesc.push_back( _groupByAttr );
+	//operator's current value (aggregate value)
+	if( _aggOp == MAX || _aggOp == MIN || _aggOp == SUM || _aggOp == AVG )
+	{
+		_groupByDesc.push_back( _aggAttr );
+	}
+	//if necessary counter value
+	if( _aggOp == AVG || _aggOp == COUNT )
+	{
+		_groupByDesc.push_back( (Attribute){"", TypeInt, sizeof(int)} );
+	}
+
+	//create a description of record but only with names
+	for(unsigned int j = 0; j < _groupByDesc.size(); j++)
+	{
+		_groupByNames.push_back( _groupByDesc[j].name );
+	}
+
+	//loop thru input index
+	void* buffer = malloc(PAGE_SIZE);
+	memset(buffer, 0, PAGE_SIZE);
+
+	RC errCode = 0;
+	RecordBasedFileManager* rbfm = RecordBasedFileManager::instance();
+
+	//create as many buckets as necessary (each bucket is a separate RBFM file)
+	for( unsigned int j = 0; j < _numOfPartitions; j++ )
+	{
+		rbfm->createFile( generatePartitionName(j) );
+	}
+
+	//loop thru iterator and change in-memory values
+	while( _inputStream->getNextTuple(buffer) == 0 )
+	{
+		//get offset to the aggregated record field
+		int offset = 0;
+		if( (errCode = getOffsetToProperField(buffer,
+				_inputStreamDesc, _aggAttr, offset)) != 0 )
+		{
+			free(buffer);
+			exit(errCode);
+		}
+
+		//calculate pointer to the aggregated field
+		void* aggregateField = (char*)buffer + offset;
+
+		offset = 0;
+		//get offset to grouped record field
+		if( (errCode = getOffsetToProperField(buffer,
+				_inputStreamDesc, _groupByAttr, offset)) != 0 )
+		{
+			free(buffer);
+			exit(errCode);
+		}
+
+		//calculate pointer to the grouped field
+		void* groupByField = (char*)buffer + offset;
+
+		//hash grouped field to determine bucket number
+		unsigned int hashKey = IndexManager::instance()->hash(_groupByAttr, groupByField);
+		unsigned int bktNumber = hashKey % _numOfPartitions;
+
+		//now scan thru the partition to find out whether record with the group-by name already exists
+		RBFM_ScanIterator it;
+		FileHandle fileHandle;
+
+		//open file that represents bucket
+		if( (errCode = rbfm->openFile( generatePartitionName(bktNumber), fileHandle )) != 0 )
+		{
+			free(buffer);
+			exit(errCode);
+		}
+
+		//open scan
+		if( (errCode = rbfm->scan(fileHandle, _groupByDesc, "", NO_OP, NULL, _groupByNames, it)) != 0 )
+		{
+			free(buffer);
+			exit(errCode);
+		}
+
+		//iterate over the records to find one with the same group-by attribute
+		RID recRid;
+		void* recBuf = malloc(PAGE_SIZE);
+		memset(recBuf, 0, PAGE_SIZE);
+		bool recordIsFound = false;
+		while( it.getNextRecord(recRid, recBuf) == 0 )
+		{
+			//determine if this record is the one, i.e. it's first field (group-by attribute) matches
+			//one that is coming from input stream record
+			if( compareTwoField(recBuf, groupByField, _groupByAttr.type, EQ_OP) )
+			{
+				recordIsFound = true;
+				break;
+			}
+		}
+		//not going to scan any more, so close iterator
+		it.close();
+
+		if( recordIsFound == false )
+		{
+			//place group-by attribute value as a first item in the new record
+			offset = 0;
+			switch(_groupByAttr.type)
+			{
+			case TypeInt:
+				((int*)recBuf)[0] = ((int*)groupByField)[0];
+				break;
+			case TypeReal:
+				((float*)recBuf)[0] = ((float*)groupByField)[0];
+				break;
+			case TypeVarChar:
+				offset = ((int*)groupByField)[0] + sizeof(int);
+				memcpy(recBuf, groupByField, offset);
+				break;
+			}
+
+			//if no record was found then one needs to be created
+			//"allocate" value of aggregate type for MIN, MAX, SUM, and AVG
+			if( _aggOp == MIN || _aggOp == MAX || _aggOp == SUM || _aggOp == AVG )
+			{
+				//depending on the type of aggregate value allocate either integer or float
+				switch(_aggAttr.type)
+				{
+				case TypeInt:
+					//in case this is MIN or MAX, set lower/upper bound
+					if( _aggOp == MAX )
+					{
+						((int*) ((char*)groupByField + offset) )[0] = INT32_MIN;
+					}
+					else if( _aggOp == MIN )
+					{
+						((int*) ((char*)groupByField + offset) )[0] = INT32_MAX;
+					}
+					break;
+				case TypeReal:
+					//in case this is MIN or MAX, set lower/upper bound
+					if( _aggOp == MAX )
+					{
+						((float*) ((char*)groupByField + offset) )[0] = FLT_MIN;
+					}
+					else if( _aggOp == MIN )
+					{
+						((float*) ((char*)groupByField + offset) )[0] = FLT_MAX;
+					}
+					break;
+				case TypeVarChar:
+					free(buffer);
+					free(recBuf);
+					exit(errCode);	//aggregated attribute cannot be VarChar
+				}
+				//point at the end of the added field
+				//since both float and integer is 4 bytes long, so increment offset by 4
+				offset += 4;
+			}
+			//"allocate" integer for AVG, and COUNT
+			if( _aggOp == AVG || _aggOp == COUNT )
+			{
+				((int*) ((char*)groupByField + offset) )[0] = 0;	//set counter to 0
+			}
+		}
+
+		//depending on the type perform comparisons and/or updates
+		switch(_aggOp)
+		{
+		case MAX:
+			//if new value > current maximum (inside bucket), then
+			if( compareTwoField
+					(aggregateField, (char*)groupByField + offset - 4, _aggAttr.type, GT_OP) )
+			{
+				//place the current maximum with new value
+				memcpy(aggregateField, (char*)groupByField + offset - 4, 4);
+			}
+			break;
+		case MIN:
+			//if new value < current minimum (inside bucket), then
+			if( compareTwoField
+					(aggregateField, (char*)groupByField + offset - 4, _aggAttr.type, LT_OP) )
+			{
+				//place the current minimum with new value
+				memcpy(aggregateField, (char*)groupByField + offset - 4, 4);
+			}
+			break;
+		case SUM:
+		case AVG:
+			//add up new value to the one stored inside bucket
+			if( _aggAttr.type == TypeInt )
+			{
+				((int*) ((char*)groupByField + offset - 4) )[0] += ((int*)aggregateField)[0];
+			}
+			else if( _aggAttr.type == TypeReal )
+			{
+				((float*) ((char*)groupByField + offset - 4) )[0] += ((float*)aggregateField)[0];
+			}
+			else
+			{
+				free(buffer);
+				free(recBuf);
+				exit(errCode);	//aggregated attribute cannot be VarChar
+			}
+			break;
+		default:
+			break;
+		}
+
+		//for AVG, we need to count number of elements processed to compute average value
+		//and obviously for count same operation is required
+		if( _aggOp == AVG )
+		{
+			((int*) ((char*)groupByField + offset - 4) )[0] += 1;
+		}
+		else if( _aggOp == COUNT )
+		{
+			((int*) ((char*)groupByField + offset) )[0] += 1;
+		}
+
+		//now depending on whether record was found in the bucket or not, either update existing
+		//record or insert a new one
+		if( recordIsFound )
+		{
+			if( (errCode = rbfm->updateRecord(fileHandle, _groupByDesc, recBuf, recRid)) != 0 )
+			{
+				free(buffer);
+				free(recBuf);
+				exit(errCode);
+			}
+		}
+		else
+		{
+			if( (errCode = rbfm->insertRecord(fileHandle, _groupByDesc, recBuf, recRid)) != 0 )
+			{
+				free(buffer);
+				free(recBuf);
+				exit(errCode);
+			}
+		}
+
+		//deallocate buffer for record
+		free(recBuf);
+
+		//close the file
+		if( (errCode = rbfm->closeFile(fileHandle)) != 0 )
+		{
+			free(buffer);
+			exit(errCode);
+		}
+	}
+
+	//deallocate buffer for input stream data
+	free(buffer);
+
+	//setup group iterator that will be used in GetNextEntry
+	//now scan thru the partition to find out whether record with the group-by name already exists
+
+	//start from the 0th bucket and advance thru all others
+	_groupByCurrentBucketNumber = 0;
+
+	//open file that represents bucket
+	if( (errCode = rbfm->openFile( generatePartitionName(_groupByCurrentBucketNumber), _groupByHandle )) != 0 )
+	{
+		free(buffer);
+		exit(errCode);
+	}
+
+	//open scan
+	if( (errCode = rbfm->scan(_groupByHandle, _groupByDesc, "", NO_OP, NULL, _groupByNames, _groupByIterator)) != 0 )
+	{
+		free(buffer);
+		exit(errCode);
+	}
 }
 ;
+
+RC Aggregate::nextBucket()
+{
+	RC errCode = 0;
+
+	RecordBasedFileManager* rbfm = RecordBasedFileManager::instance();
+
+	if( (errCode = rbfm->closeFile(_groupByHandle)) != 0 )
+	{
+		_groupByIterator.close();
+		return errCode;
+	}
+
+	if( (errCode = _groupByIterator.close()) != 0 )
+	{
+		return errCode;
+	}
+
+	_groupByCurrentBucketNumber++;
+	if( _groupByCurrentBucketNumber >= _numOfPartitions )
+		return QE_EOF;	//no more buckets to search in
+
+	//open file that represents bucket
+	if( (errCode = rbfm->openFile( generatePartitionName(_groupByCurrentBucketNumber), _groupByHandle )) != 0 )
+	{
+		exit(errCode);
+	}
+
+	//open scan
+	if( (errCode = rbfm->scan(_groupByHandle, _groupByDesc, "", NO_OP, NULL, _groupByNames, _groupByIterator)) != 0 )
+	{
+		exit(errCode);
+	}
+
+	//success
+	return errCode;
+}
 
 Aggregate::~Aggregate() {
 //nothing to be done
@@ -588,17 +921,13 @@ RC Aggregate::next_basic(void* data)
 	void* buffer = malloc(PAGE_SIZE);
 	memset(buffer, 0, PAGE_SIZE);
 
-	//determine type of records that this input stream will supply
-	vector<Attribute> recordDesc;
-	_inputStream->getAttributes(recordDesc);
-
-	//loop thru iterator has and change in-memory values
+	//loop thru iterator and change in-memory values
 	while( _inputStream->getNextTuple(buffer) == 0 )
 	{
 		//get offset to the proper record field
 		int offset = 0;
 		if( (errCode = getOffsetToProperField(buffer,
-				recordDesc, _aggAttr, offset)) != 0 )
+				_inputStreamDesc, _aggAttr, offset)) != 0 )
 		{
 			free(buffer);
 			return errCode;
@@ -611,7 +940,7 @@ RC Aggregate::next_basic(void* data)
 		switch(_aggOp)
 		{
 		case MAX:
-			//if new value (stored in buf) > current maximum (storeed in inMemValues[0]), then
+			//if new value (stored in buf) > current maximum (stored in inMemValues[0]), then
 			if( compareTwoField(buf, inMemValues[0], _aggAttr.type, GT_OP) )
 			{
 				//place the current maximum with new value
@@ -619,7 +948,7 @@ RC Aggregate::next_basic(void* data)
 			}
 			break;
 		case MIN:
-			//if new value (stored in buf) < current minimum (storeed in inMemValues[0]), then
+			//if new value (stored in buf) < current minimum (stored in inMemValues[0]), then
 			if( compareTwoField(buf, inMemValues[0], _aggAttr.type, LT_OP) )
 			{
 				//place the current minimum with new value
@@ -688,7 +1017,58 @@ RC Aggregate::next_groupBy(void* data)
 {
 	RC errCode = 0;
 
-	//
+	//check if there is more data to be scanned
+	if( _isFinishedProcessing )
+	{
+		//if not then quit
+		return QE_EOF;
+	}
+
+	//iterate over the records to find one with the same group-by attribute
+	RID recRid;
+	void* recBuf = malloc(PAGE_SIZE);
+	memset(recBuf, 0, PAGE_SIZE);
+	bool recordIsFound = false;
+
+	//keep looping until either get a record or find an end
+	while( recordIsFound == false )
+	{
+		if( _groupByIterator.getNextRecord(recRid, recBuf) == 0 )
+		{
+			recordIsFound = true;
+		}
+		else
+		{
+			//go to next bucket (i.e. open new file)
+			if( nextBucket() != 0 )
+			{
+				//finished scanning
+				_isFinishedProcessing = true;
+				//if all buckets have been scanned, then return QE_EOF
+				return QE_EOF;
+			}
+
+			//clean up record buffer
+			memset(recBuf, 0 , PAGE_SIZE);
+		}
+	}
+
+	//update pointer to point to the start of control information for operators
+	recBuf = (char*)recBuf + ((int*)recBuf)[0] + sizeof(int);
+
+	//in case operation is AVG then divide SUM (stored in 0th element) by COUNT stored in 1st element
+	//and store the result inside the 0th element
+	if( _aggOp == AVG )
+	{
+		float currentSum = 0.0f;
+		if( _aggAttr.type == TypeInt )
+			currentSum = (float) ( (int*)recBuf )[0];
+
+		((float*)recBuf)[0] = currentSum / (float)((int*)recBuf + 1)[0];
+	}
+
+	//copy the result into output buffer
+	memcpy( data, recBuf, 4 );
 
 	//success
 	return errCode;

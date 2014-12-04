@@ -46,7 +46,6 @@ RC IndexManager::createFile(const string &fileName, const unsigned &numberOfPage
 {
 	RC errCode = 0;
 
-
 	//for faster function access create a PFM pointer
 	PagedFileManager* _pfm = PagedFileManager::instance();
 
@@ -1386,15 +1385,6 @@ RC PFMExtension::printBucket(const BUCKET_NUMBER bktNumber, const Attribute& att
 			std::cout << "overflow Page No." << physPageNum << " linked to " << (pageNumber == 1 ? "primary" : "overflow") << " page " << prevPhysPageNumber << endl << endl;
 		}
 
-		//get pointer to the end of directory slots
-		PageDirSlot* startOfDirSlot = (PageDirSlot*)((char*)_buffer + PAGE_SIZE - 2 * sizeof(unsigned int));
-
-		//find out number of directory slots
-		unsigned int* numSlots = ((unsigned int*)startOfDirSlot);
-
-		//print number of entries
-		std::cout << "   a. # of entries : " << *numSlots << endl;
-
 		//load the current page
 		if( pageNumber != _curVirtualPage || _bktNumber != bktNumber )
 		{
@@ -1409,6 +1399,15 @@ RC PFMExtension::printBucket(const BUCKET_NUMBER bktNumber, const Attribute& att
 			_curVirtualPage = pageNumber;
 			_bktNumber = bktNumber;
 		}
+
+		//get pointer to the end of directory slots
+		PageDirSlot* startOfDirSlot = (PageDirSlot*)((char*)_buffer + PAGE_SIZE - 2 * sizeof(unsigned int));
+
+		//find out number of directory slots
+		unsigned int* numSlots = ((unsigned int*)startOfDirSlot);
+
+		//print number of entries
+		std::cout << "   a. # of entries : " << *numSlots << endl;
 
 		std::cout << "   b. entries: ";
 
@@ -1565,6 +1564,11 @@ RC PFMExtension::shiftRecordsToStart //TESTED, seems to work
 		}
 	}
 
+	if( _bktNumber == 5 && _curVirtualPage == 1 && ((char*)_buffer)[4] == ((char*)_buffer)[5] && ( ((char*)_buffer)[4] >='a' && ((char*)_buffer)[4] <= 'z') )
+	{
+		cout << "changing page 1 of bucket 5" << endl;
+	}
+
 	FileHandle handle = ( _curVirtualPage == 0 ? _handle->_primBucketDataFileHandler : _handle->_overBucketDataFileHandler );
 
 	PageNum physicalPageNumber = 0;
@@ -1683,6 +1687,11 @@ RC PFMExtension::shiftRecordsToStart //TESTED, seems to work
 		{
 			decreaseNumberOfSlotsInCurrentPage = false;
 			//	2.1.2 copy this item (first record from the next page) after the record # k
+
+			if( ((unsigned int*)_buffer)[0] == 24 && ((char*)_buffer + 4)[0] == 'f' )
+			{
+				cout << "found 209/5 f => " << endl;
+			}
 
 			memcpy( (char*)dataBuffer + offsetToFreeSpace, _buffer, szOfFirstRecordInNextPage );
 
