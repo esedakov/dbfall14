@@ -448,6 +448,12 @@ Aggregate::Aggregate(Iterator *input, Attribute aggAttr, Attribute groupAttr,
 	AttrType type;
 	int size;
 	determineOutputType(type, size);
+	//set data members specifically used in group-by aggregation
+	_groupByAttr = groupAttr;
+	_numOfPartitions = numPartitions;
+	//group-by attribute
+	_groupByDesc.push_back( _groupByAttr );
+	_attributes.push_back( _groupByAttr );
 	_attributes.push_back
 		( (Attribute){ generateOpName() + "(" + _groupByAttr.name + ")", type, (unsigned int)size } );
 	//determine type of records that this input stream will supply
@@ -466,15 +472,11 @@ Aggregate::Aggregate(Iterator *input, Attribute aggAttr, Attribute groupAttr,
 	 * 	   		MAX, MIN, SUM => _aggAttr.type
 	 * 	   		COUNT => integer
 	 * 	   		AVG => < _aggAttr.type , integer >
-	 *  3 If entry exists => update it
+	 *  3. If entry exists => update it
 	 *    If such entry does not exist => insert it with the given _aggAttr values in place of operator's values
+	 *  4. setup iterator to the 0th bucket to use it inside getNextEntry procedure
 	 */
 
-	//set data members specifically used in group-by aggregation
-	_groupByAttr = groupAttr;
-	_numOfPartitions = numPartitions;
-	//group-by attribute
-	_groupByDesc.push_back( _groupByAttr );
 	//operator's current value (aggregate value)
 	if( _aggOp == MAX || _aggOp == MIN || _aggOp == SUM || _aggOp == AVG )
 	{
@@ -566,11 +568,28 @@ Aggregate::Aggregate(Iterator *input, Attribute aggAttr, Attribute groupAttr,
 			if( compareTwoField(recBuf, groupByField, _groupByAttr.type, EQ_OP) )
 			{
 				recordIsFound = true;
+				//setup offset appropriately
+				offset = 0;
+				switch(_groupByAttr.type)
+				{
+				case TypeInt:
+					offset = sizeof(int);
+					break;
+				case TypeReal:
+					offset = sizeof(float);
+					break;
+				case TypeVarChar:
+					offset = ((int*)groupByField)[0] + sizeof(int);
+					break;
+				}
+				//advance offset yet another time by 4 in case of MAX, MIN, SUM, or AVG (but not for COUNT)
+				if( _aggOp == MIN || _aggOp == MAX || _aggOp == SUM || _aggOp == AVG )
+				{
+					offset += 4;
+				}
 				break;
 			}
 		}
-		//not going to scan any more, so close iterator
-		it.close();
 
 		if( recordIsFound == false )
 		{
@@ -580,9 +599,11 @@ Aggregate::Aggregate(Iterator *input, Attribute aggAttr, Attribute groupAttr,
 			{
 			case TypeInt:
 				((int*)recBuf)[0] = ((int*)groupByField)[0];
+				offset = sizeof(int);
 				break;
 			case TypeReal:
 				((float*)recBuf)[0] = ((float*)groupByField)[0];
+				offset = sizeof(float);
 				break;
 			case TypeVarChar:
 				offset = ((int*)groupByField)[0] + sizeof(int);
@@ -601,22 +622,30 @@ Aggregate::Aggregate(Iterator *input, Attribute aggAttr, Attribute groupAttr,
 					//in case this is MIN or MAX, set lower/upper bound
 					if( _aggOp == MAX )
 					{
-						((int*) ((char*)groupByField + offset) )[0] = INT32_MIN;
+						((int*) ((char*)recBuf + offset) )[0] = INT32_MIN;
 					}
 					else if( _aggOp == MIN )
 					{
-						((int*) ((char*)groupByField + offset) )[0] = INT32_MAX;
+						((int*) ((char*)recBuf + offset) )[0] = INT32_MAX;
+					}
+					else
+					{
+						((int*) ((char*)recBuf + offset) )[0] = 0;
 					}
 					break;
 				case TypeReal:
 					//in case this is MIN or MAX, set lower/upper bound
 					if( _aggOp == MAX )
 					{
-						((float*) ((char*)groupByField + offset) )[0] = FLT_MIN;
+						((float*) ((char*)recBuf + offset) )[0] = FLT_MIN;
 					}
 					else if( _aggOp == MIN )
 					{
-						((float*) ((char*)groupByField + offset) )[0] = FLT_MAX;
+						((float*) ((char*)recBuf + offset) )[0] = FLT_MAX;
+					}
+					else
+					{
+						((float*) ((char*)recBuf + offset) )[0] = 0;
 					}
 					break;
 				case TypeVarChar:
@@ -631,7 +660,7 @@ Aggregate::Aggregate(Iterator *input, Attribute aggAttr, Attribute groupAttr,
 			//"allocate" integer for AVG, and COUNT
 			if( _aggOp == AVG || _aggOp == COUNT )
 			{
-				((int*) ((char*)groupByField + offset) )[0] = 0;	//set counter to 0
+				((int*) ((char*)recBuf + offset) )[0] = 0;	//set counter to 0
 			}
 		}
 
@@ -641,19 +670,19 @@ Aggregate::Aggregate(Iterator *input, Attribute aggAttr, Attribute groupAttr,
 		case MAX:
 			//if new value > current maximum (inside bucket), then
 			if( compareTwoField
-					(aggregateField, (char*)groupByField + offset - 4, _aggAttr.type, GT_OP) )
+					(aggregateField, (char*)recBuf + offset - 4, _aggAttr.type, GT_OP) )
 			{
 				//place the current maximum with new value
-				memcpy(aggregateField, (char*)groupByField + offset - 4, 4);
+				memcpy((char*)recBuf + offset - 4, aggregateField, 4);
 			}
 			break;
 		case MIN:
 			//if new value < current minimum (inside bucket), then
 			if( compareTwoField
-					(aggregateField, (char*)groupByField + offset - 4, _aggAttr.type, LT_OP) )
+					(aggregateField, (char*)recBuf + offset - 4, _aggAttr.type, LT_OP) )
 			{
 				//place the current minimum with new value
-				memcpy(aggregateField, (char*)groupByField + offset - 4, 4);
+				memcpy((char*)recBuf + offset - 4, aggregateField, 4);
 			}
 			break;
 		case SUM:
@@ -661,11 +690,11 @@ Aggregate::Aggregate(Iterator *input, Attribute aggAttr, Attribute groupAttr,
 			//add up new value to the one stored inside bucket
 			if( _aggAttr.type == TypeInt )
 			{
-				((int*) ((char*)groupByField + offset - 4) )[0] += ((int*)aggregateField)[0];
+				((int*) ((char*)recBuf + offset - 4) )[0] += ((int*)aggregateField)[0];
 			}
 			else if( _aggAttr.type == TypeReal )
 			{
-				((float*) ((char*)groupByField + offset - 4) )[0] += ((float*)aggregateField)[0];
+				((float*) ((char*)recBuf + offset - 4) )[0] += ((float*)aggregateField)[0];
 			}
 			else
 			{
@@ -680,13 +709,9 @@ Aggregate::Aggregate(Iterator *input, Attribute aggAttr, Attribute groupAttr,
 
 		//for AVG, we need to count number of elements processed to compute average value
 		//and obviously for count same operation is required
-		if( _aggOp == AVG )
+		if( _aggOp == AVG || _aggOp == COUNT )
 		{
-			((int*) ((char*)groupByField + offset - 4) )[0] += 1;
-		}
-		else if( _aggOp == COUNT )
-		{
-			((int*) ((char*)groupByField + offset) )[0] += 1;
+			((int*) ((char*)recBuf + offset) )[0] += 1;
 		}
 
 		//now depending on whether record was found in the bucket or not, either update existing
@@ -713,12 +738,8 @@ Aggregate::Aggregate(Iterator *input, Attribute aggAttr, Attribute groupAttr,
 		//deallocate buffer for record
 		free(recBuf);
 
-		//close the file
-		if( (errCode = rbfm->closeFile(fileHandle)) != 0 )
-		{
-			free(buffer);
-			exit(errCode);
-		}
+		//close iterator for the buckets
+		it.close();
 	}
 
 	//deallocate buffer for input stream data
@@ -752,31 +773,34 @@ RC Aggregate::nextBucket()
 
 	RecordBasedFileManager* rbfm = RecordBasedFileManager::instance();
 
-	if( (errCode = rbfm->closeFile(_groupByHandle)) != 0 )
-	{
-		_groupByIterator.close();
-		return errCode;
-	}
-
 	if( (errCode = _groupByIterator.close()) != 0 )
 	{
 		return errCode;
 	}
 
 	_groupByCurrentBucketNumber++;
-	if( _groupByCurrentBucketNumber >= _numOfPartitions )
+	if( _groupByCurrentBucketNumber >= (int)_numOfPartitions )
+	{
+		//clean up partition files
+		for( int i = 0; i < (int)_numOfPartitions; i++ )
+		{
+			rbfm->destroyFile( generatePartitionName(i) );
+		}
 		return QE_EOF;	//no more buckets to search in
+	}
+
+	_groupByHandle = FileHandle();
 
 	//open file that represents bucket
 	if( (errCode = rbfm->openFile( generatePartitionName(_groupByCurrentBucketNumber), _groupByHandle )) != 0 )
 	{
-		exit(errCode);
+		return errCode;
 	}
 
 	//open scan
 	if( (errCode = rbfm->scan(_groupByHandle, _groupByDesc, "", NO_OP, NULL, _groupByNames, _groupByIterator)) != 0 )
 	{
-		exit(errCode);
+		return errCode;
 	}
 
 	//success
@@ -1053,8 +1077,13 @@ RC Aggregate::next_groupBy(void* data)
 		}
 	}
 
+	//copy group-by attribute value
+	int size = ((int*)recBuf)[0] + sizeof(int);
+	memcpy( data, recBuf, size );
+	data = (char*)data + size;
+
 	//update pointer to point to the start of control information for operators
-	recBuf = (char*)recBuf + ((int*)recBuf)[0] + sizeof(int);
+	recBuf = (char*)recBuf + size;
 
 	//in case operation is AVG then divide SUM (stored in 0th element) by COUNT stored in 1st element
 	//and store the result inside the 0th element
@@ -1062,6 +1091,8 @@ RC Aggregate::next_groupBy(void* data)
 	{
 		float currentSum = 0.0f;
 		if( _aggAttr.type == TypeInt )
+			currentSum = (float) ( (int*)recBuf )[0];
+		else if( _aggAttr.type == TypeReal )
 			currentSum = (float) ( (int*)recBuf )[0];
 
 		((float*)recBuf)[0] = currentSum / (float)((int*)recBuf + 1)[0];
