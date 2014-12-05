@@ -17,6 +17,7 @@ using namespace std;
 
 typedef enum{ MIN = 0, MAX, SUM, AVG, COUNT } AggregateOp;
 
+unsigned numGHJoins=0;
 
 // The following functions use the following
 // format for the passed data.
@@ -251,21 +252,6 @@ class Project : public Iterator {
 
 };
 
-class GHJoin : public Iterator {
-    // Grace hash join operator
-    public:
-      GHJoin(Iterator *leftIn,               // Iterator of input R
-            Iterator *rightIn,               // Iterator of input S
-            const Condition &condition,      // Join condition (CompOp is always EQ)
-            const unsigned numPartitions     // # of partitions for each relation (decided by the optimizer)
-      );
-      ~GHJoin();
-
-      RC getNextTuple(void *data);
-      // For attribute in vector<Attribute>, name it as rel.attr
-      void getAttributes(vector<Attribute> &attrs) const;
-};
-
 class inMemoryHashTable
 {
 private:
@@ -280,6 +266,64 @@ public:
 	bool getRecord(const void* key, void* outRecordData, unsigned int& length);
 
 };
+
+class GHJoin : public Iterator {
+    // Grace hash join operator
+    public:
+      GHJoin(Iterator *leftIn,               // Iterator of input R
+            Iterator *rightIn,               // Iterator of input S
+            const Condition &condition,      // Join condition (CompOp is always EQ)
+            const unsigned numPartitions     // # of partitions for each relation (decided by the optimizer)
+      );
+      ~GHJoin();
+
+      RC getNextTuple(void *data);
+      // For attribute in vector<Attribute>, name it as rel.attr
+      void getAttributes(vector<Attribute> &attrs) const;
+      void getFieldTuple(void * tuple, void * field, vector<Attribute> attrs, unsigned pos);
+    private:
+      RC loadNextPartition();
+      RC cleanUp();
+
+    private:
+      RecordBasedFileManager* _rbfm; //necessary to create partitions
+      PagedFileManager *_pfm; // to get the number of pages
+      IndexManager* _index_manager; //just for hash function
+      unsigned _numPartitions;
+      //partitions
+      std::vector<FileHandle> leftPartitions;
+      std::vector<FileHandle> rightPartitions;
+
+      vector<Attribute> leftAttrs; // vector of left attributes
+      vector<Attribute> rightAttrs; // vector of right attributes
+      vector<Attribute> finalAttrs; // vector of right attributes
+
+      unsigned leftPosition; // position to compare
+      unsigned rightPosition; // position to compare
+
+      void * leftValue; //left hand value to compare
+      void * rightValue; //right hand value to compare
+
+      unsigned currentBucket; // current bucket for nextTuple
+
+      unsigned smallerPartition; // smaller partition (left 0 or right 1)
+
+      inMemoryHashTable* _hashTable; //hash table in memory
+
+      FileHandle _innerRelation;
+      vector<Attribute> _innerAttrs;
+      unsigned _innerPosition;
+
+      FileHandle _outerRelation ;
+      vector<Attribute> _outerAttrs; // vector of right attributes
+      unsigned _outerPosition;
+
+      RBFM_ScanIterator _inner_rsi; //iterator for inner relation
+      bool _finishedProcessing; //flags
+      bool _starting;
+};
+
+
 
 class BNLJoin : public Iterator {
     // Block nested-loop join operator

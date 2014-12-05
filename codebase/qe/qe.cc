@@ -306,49 +306,6 @@ void Project::getAttributes(vector<Attribute> &attrs) const {
 	attrs = this->attrs;
 }
 
-
-/**
- * Grace Hash Join  Class:
- **/
-GHJoin::GHJoin(Iterator *leftIn, Iterator *rightIn,	const Condition &condition, const unsigned numPartitions ) {
-
-/**
- * Algorithm:
- *
- * - Choose a hash bucket such that R is partitioned into partitions, each one of approximately equal size.
- *  Allocate output buffers, one each for each partition of R.
- *
- * - Scan R. Hash each tuple and place it in the appropriate output buffer. When an output buffer fills,
- *  it is written to disk. After R has been completely scanned, flush all output buffers to disk.
- *
- * - Scan S. Use same hash function which was used for R and repeat the process in previous step.
- *
- * - Read Ri into memory and build a hash table for it.
- *
- * - Hash each tuple of Si with same hash function used previously and probe for a match. If match exists, output tuple in result, move on to the next tuple.
-**/
-}
-;
-
-GHJoin::~GHJoin() {
-
-}
-;
-
-RC GHJoin::getNextTuple(void *data) {
-	return QE_EOF;
-}
-;
-
-void GHJoin::getAttributes(vector<Attribute> &attrs) const {
-
-}
-;
-
-/**
- * Block Nested-Loop Join Class:
- **/
-
 inMemoryHashTable::inMemoryHashTable(const AttrType typeOfKeyInRecord, vector<Attribute> description)
 : _table(NULL), _type(typeOfKeyInRecord), _desc(description)
 {
@@ -637,6 +594,379 @@ void inMemoryHashTable::insertRecord
 		break;
 	}
 }
+
+
+/**
+ * Grace Hash Join  Class:
+ **/
+GHJoin::GHJoin(Iterator *leftIn, Iterator *rightIn, const Condition &condition,
+		const unsigned numPartitions) {
+
+	/**
+	 * Algorithm:
+	 *
+	 * - Choose a hash bucket such that R is partitioned into partitions, each one of approximately equal size.
+	 *  Allocate output buffers, one each for each partition of R.
+	 *
+	 * - Scan R. Hash each tuple and place it in the appropriate output buffer. When an output buffer fills,
+	 *  it is written to disk. After R has been completely scanned, flush all output buffers to disk.
+	 *
+	 * - Scan S. Use same hash function which was used for R and repeat the process in previous step.
+	 *
+	 * - Read Ri into memory and build a hash table for it.
+	 *
+	 * - Hash each tuple of Si with same hash function used previously and probe for a match. If match exists, output tuple in result, move on to the next tuple.
+	 **/
+
+	int errCode = 0;
+	_finishedProcessing = false;
+	_starting = true;
+	//set the parameters
+	_numPartitions = numPartitions;
+	_rbfm = RecordBasedFileManager::instance();
+	_pfm = PagedFileManager::instance();
+	_index_manager = IndexManager::instance();
+
+	currentBucket = 0;
+	numGHJoins++;
+
+	//Partitioning the left hand
+	leftIn->getAttributes(leftAttrs);
+
+	//find the correct position in the vector of attributes comparing with the right hand
+	for (unsigned i = 0; i < leftAttrs.size(); i++) {
+		if (leftAttrs[i].name.compare(condition.lhsAttr) == 0) {
+			leftPosition = i;
+			leftValue = malloc(leftAttrs[i].length + sizeof(int));
+			break;
+		}
+	}
+
+	//create partitions for left
+	for (unsigned i = 0; i < numPartitions; i++) {
+
+		if ((errCode = _rbfm->createFile("left_join" + to_string(numGHJoins) + "_" + to_string(i)))	!= 0) {
+			cout << "Error: " << errCode << endl;
+		}
+
+	}
+
+	for (unsigned i = 0; i < numPartitions; i++) {
+
+		FileHandle fileHandle;
+		if ((errCode = _rbfm->openFile(
+				"left_join" + to_string(numGHJoins) + "_" + to_string(i),
+				fileHandle)) != 0) {
+			cout << "Error: " << errCode << endl;
+		}
+		leftPartitions.push_back(fileHandle);
+	}
+
+	void *tuple = malloc(PAGE_SIZE); //this function eventually calls RM.getNextEntry and RM expects that passed data buffer has
+									 //pre-allocated space (for safety reasons it is usually page size => so that it would not overflow)
+
+	unsigned hash_value;
+	RID rid;
+
+	while (leftIn->getNextTuple(tuple) != QE_EOF) { //get next tuple
+		getFieldTuple(tuple, leftValue, leftAttrs, leftPosition); // get the field to apply the hash function
+		hash_value = (_index_manager->hash(leftAttrs[leftPosition], leftValue))
+				% numPartitions; //get the bucker number
+		if ((errCode = _rbfm->insertRecord(leftPartitions[hash_value],
+				leftAttrs, tuple, rid)) != 0) { // insert the tuple into the bucket
+			cout << "Error: " << errCode << endl;
+		}
+	}
+
+	//Partitioning the right hand
+	rightIn->getAttributes(rightAttrs);
+
+	//find the correct position in the vector of attributes comparing with the right hand
+	for (unsigned i = 0; i < rightAttrs.size(); i++) {
+		if (rightAttrs[i].name.compare(condition.rhsAttr) == 0) {
+			rightPosition = i;
+			rightValue = malloc(rightAttrs[i].length + sizeof(int));
+			break;
+		}
+	}
+
+	//create partitions for right
+	for (unsigned i = 0; i < numPartitions; i++) {
+
+		if ((errCode = _rbfm->createFile(
+				"right_join" + to_string(numGHJoins) + "_" + to_string(i)))
+				!= 0) {
+			cout << "Error: " << errCode << endl;
+		}
+
+	}
+
+	for (unsigned i = 0; i < numPartitions; i++) {
+
+		FileHandle fileHandle;
+		if ((errCode = _rbfm->openFile(
+				"right_join" + to_string(numGHJoins) + "_" + to_string(i),
+				fileHandle)) != 0) {
+			cout << "Error: " << errCode << endl;
+		}
+		rightPartitions.push_back(fileHandle);
+	}
+
+	while (rightIn->getNextTuple(tuple) != QE_EOF) { //get next tuple
+		getFieldTuple(tuple, rightValue, rightAttrs, rightPosition); // get the field to apply the hash function
+		hash_value = (_index_manager->hash(rightAttrs[rightPosition],
+				rightValue)) % numPartitions; //get the bucker number
+		_rbfm->insertRecord(rightPartitions[hash_value], rightAttrs, tuple,
+				rid); // insert the tuple into the bucket
+	}
+
+	//set list of final attributes
+	finalAttrs.insert(finalAttrs.end(), leftAttrs.begin(), leftAttrs.end());
+	finalAttrs.insert(finalAttrs.end(), rightAttrs.begin(), rightAttrs.end());
+
+}
+
+GHJoin::~GHJoin() {
+	delete _hashTable;
+}
+
+void GHJoin::getFieldTuple(void * tuple, void * field, vector<Attribute> attrs, unsigned pos) {
+	int offset = 0;
+	unsigned i = 0;
+	for (i = 0; i < pos; i++) { //offset to the correct position of the field in tuple
+		switch (attrs[i].type) {
+
+		case TypeInt:
+			//sum field size of int
+			offset += sizeof(int);
+			break;
+
+		case TypeReal:
+			//sum field size of float
+			offset += sizeof(float);
+			break;
+
+		case TypeVarChar:
+			//get integer that represent size of char-array and add it to the offset
+			int stringLength = *(int *) ((char *) tuple + offset);
+			offset += sizeof(int) + stringLength;
+			break;
+		}
+
+	}
+
+	int attrLength = 0;
+	//get the length of the field
+	switch (attrs[i].type) {
+	case TypeInt:
+		//sum length of int
+		attrLength = sizeof(int);
+		break;
+
+	case TypeReal:
+		//sum length of float
+		attrLength = sizeof(float);
+		break;
+
+	case TypeVarChar:
+		//sum length of variable char
+		attrLength = *(int *) ((char *) tuple + offset) + sizeof(int);
+		break;
+	}
+
+	//get the property field
+	memcpy(field, (char *) tuple + offset, attrLength);
+}
+
+RC GHJoin::loadNextPartition() {
+	if (currentBucket >= _numPartitions) { //finishing join
+		_finishedProcessing = true;
+		return 0;
+	}
+	RC errCode = 0;
+
+	//create a hash table with the smaller partition
+	if (leftPartitions[currentBucket].getNumberOfPages() > rightPartitions[currentBucket].getNumberOfPages()) { // look for the smaller partition, then hash it
+		_outerRelation = rightPartitions[currentBucket];
+		_outerAttrs = rightAttrs;
+		_outerPosition = rightPosition;
+		_innerRelation = leftPartitions[currentBucket];
+		_innerAttrs = leftAttrs;
+		_innerPosition = leftPosition;
+		smallerPartition=1;
+	} else {
+		_outerRelation = leftPartitions[currentBucket];
+		_outerAttrs = leftAttrs;
+		_outerPosition = leftPosition;
+		_innerRelation = rightPartitions[currentBucket];
+		_innerAttrs = rightAttrs;
+		_innerPosition = rightPosition;
+		smallerPartition=0;
+	}
+
+	//create hash table
+	RID rid;
+	void *returnedData = malloc(PAGE_SIZE);
+	_hashTable = new inMemoryHashTable(_outerAttrs[_outerPosition].type, _outerAttrs);
+	_hashTable->clearTable();
+
+	//set up scan RBFM
+	RBFM_ScanIterator rsi;
+	vector<string> outer_projected_attrs;
+	for (unsigned i = 0; i < _outerAttrs.size(); i++) {
+		outer_projected_attrs.push_back(_outerAttrs[i].name);
+	}
+
+	if ((errCode = _rbfm->scan(_outerRelation, _outerAttrs, "", NO_OP,
+	NULL, outer_projected_attrs, rsi)) != 0)
+		return errCode;
+
+	while (rsi.getNextRecord(rid, returnedData) != RM_EOF) {
+		//determine position of the field on which to join
+		int offset = 0;
+		if ((errCode = getOffsetToProperField(returnedData, _outerAttrs,
+				_outerAttrs[_outerPosition], offset)) != 0) {
+			free(returnedData);
+			return errCode;
+		}
+
+		//determine size of the record
+		int length = sizeOfRecord(_outerAttrs, returnedData);
+
+		//insert record into hash table
+		_hashTable->insertRecord(returnedData, offset, length);
+	}
+
+
+
+	//set the inner scan interator over rbfm
+	vector<string> inner_projected_attrs;
+	for (unsigned i = 0; i < _innerAttrs.size(); i++) {
+		inner_projected_attrs.push_back(_innerAttrs[i].name);
+	}
+	if ((errCode = _rbfm->scan(_innerRelation, _innerAttrs, "", NO_OP,
+	NULL, inner_projected_attrs, _inner_rsi)) != 0) //check this part
+		return errCode;
+
+	return errCode;
+
+}
+
+RC GHJoin::getNextTuple(void *data) {
+	RC errCode = 0;
+
+	if (_starting) { //load the partition first time
+		if ((errCode = loadNextPartition()) != 0) {
+			return errCode;
+		}
+
+		_starting = false;
+	}
+
+	//allocate buffer for iterated record
+	void* recordBuf = malloc(PAGE_SIZE);
+	memset(recordBuf, 0, PAGE_SIZE);
+	RID rid;
+
+	while (true) {
+		//get tuple from the inner relation
+		if ((errCode = _inner_rsi.getNextRecord(rid, recordBuf)) != 0) {
+			//next partition
+			currentBucket++;
+			if ((errCode = loadNextPartition()) != 0) {
+				cout << "error_ " << errCode << endl;
+				free(recordBuf);
+				return errCode;
+			}
+
+			//check if reached the end
+			if (_finishedProcessing) {
+				//return end of joining procedure
+				free(recordBuf);
+				if((errCode=cleanUp())!=0)
+					return errCode;
+				return QE_EOF;
+			}
+
+		}
+
+		//determine position of the field on which to join
+		int offset = 0;
+		if ((errCode = getOffsetToProperField(recordBuf, _innerAttrs,
+				_innerAttrs[_innerPosition], offset)) != 0) {
+			cout << "error " << errCode << endl;
+			free(recordBuf);
+			return errCode;
+		}
+
+		//determine pointer to the field
+		void* ptr = (char*) recordBuf + offset;
+
+		//records
+		void* recordData = malloc(PAGE_SIZE);
+		memset(recordData, 0, PAGE_SIZE);
+		unsigned int lengthOuter = 0;
+
+		//check if this record is in hash table
+		if (_hashTable->getRecord(ptr, recordData, lengthOuter)) {
+			//determine size of the record
+			int lengthInner = sizeOfRecord(_innerAttrs, recordBuf);
+
+			//copy outer and then inner records into out data buffer
+			if(smallerPartition==0){ //if the smaller partition is left hand
+				memcpy(data, recordData, lengthOuter);
+				data = (char*) data + lengthOuter;
+				memcpy(data, recordBuf, lengthInner);
+			}else{
+				memcpy(data, recordBuf, lengthInner);
+				data = (char*) data + lengthInner;
+				memcpy(data, recordData, lengthOuter);
+			}
+			//quit and return to the caller
+			free(recordData);
+			break;
+		}
+
+		free(recordData);
+	}
+
+	free(recordBuf);
+
+	//success
+	return errCode;
+}
+
+void GHJoin::getAttributes(vector<Attribute> &attrs) const {
+	attrs.clear();
+	attrs=finalAttrs;
+}
+
+RC GHJoin::cleanUp(){
+	//delete the temporary files
+	RC errCode=0;
+	for(int i=0; i<_numPartitions; i++){
+		//left hand
+		string fileName = leftPartitions[i]._info->_name;
+		if((_rbfm->closeFile(leftPartitions[i]))!=0)
+			return errCode;
+		if((_rbfm->destroyFile(fileName))!=0)
+			return errCode;
+
+		//right hand
+		fileName = rightPartitions[i]._info->_name;
+		if((_rbfm->closeFile(rightPartitions[i]))!=0)
+			return errCode;
+		if((_rbfm->destroyFile(fileName))!=0)
+			return errCode;
+	}
+
+	return errCode;
+}
+
+/**
+ * Block Nested-Loop Join Class:
+ **/
+
 
 void determineAttribute(const Iterator* it, const Condition cond, const bool isLeft, Attribute& outAttr)
 {
