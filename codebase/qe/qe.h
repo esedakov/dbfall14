@@ -266,6 +266,20 @@ class GHJoin : public Iterator {
       void getAttributes(vector<Attribute> &attrs) const;
 };
 
+class inMemoryHashTable
+{
+private:
+	void* _table;
+	AttrType _type;
+	vector<Attribute> _desc;
+public:
+	inMemoryHashTable(const AttrType typeOfKeyInRecord, vector<Attribute> description);
+	~inMemoryHashTable();
+	void insertRecord(const void* recordData, const unsigned int offsetToKeyField, const unsigned int recordLength);
+	void clearTable();
+	bool getRecord(const void* key, void* outRecordData, unsigned int& length);
+
+};
 
 class BNLJoin : public Iterator {
     // Block nested-loop join operator
@@ -280,6 +294,22 @@ class BNLJoin : public Iterator {
         RC getNextTuple(void *data);
         // For attribute in vector<Attribute>, name it as rel.attr
         void getAttributes(vector<Attribute> &attrs) const;
+    protected:
+        RC loadNextBlock();			//for outer relation
+        RC reloadInnerRelation();	//for inner relation
+    private:
+        inMemoryHashTable* _hashTable;
+        Attribute _outer;
+        vector<Attribute> _outerDesc;
+        Attribute _inner;
+        vector<Attribute> _innerDesc;
+        void* _innerValue;				//have not used it! (may need to re-code...)
+        CompOp _operator;
+        int _blockSize;	//number of records that fit in a block
+        vector<Attribute> _attrDesc;
+        Iterator* _outerRelation;
+        TableScan* _innerRelation;
+        bool _finishedProcessing;
 };
 
 
@@ -325,7 +355,6 @@ class Aggregate : public Iterator {
         void getAttributes(vector<Attribute> &attrs) const;
     private:
         void determineOutputType(AttrType& type, int& size);
-        RC getOffsetToProperField(const void* record, const vector<Attribute> recordDesc, const Attribute properField, int& offset);
         string generateOpName();
         string generatePartitionName(unsigned int partitionNumber);
         RC next_groupBy(void* data);

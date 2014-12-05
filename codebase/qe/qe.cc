@@ -1,6 +1,9 @@
 #include "qe.h"
 #include <cfloat>
 
+//prototype(s)
+RC getOffsetToProperField(const void* record, const vector<Attribute> recordDesc, const Attribute properField, int& offset);
+
 /** Filter Class:
  * This filter class is initialized by an input iterator and a selection condition.
  * It filters the tuples from the input iterator by applying the filter predicate condition on them.
@@ -345,23 +348,520 @@ void GHJoin::getAttributes(vector<Attribute> &attrs) const {
 /**
  * Block Nested-Loop Join Class:
  **/
-BNLJoin::BNLJoin(Iterator *leftIn,	TableScan *rightIn, const Condition &condition, const unsigned numRecords) {
 
+inMemoryHashTable::inMemoryHashTable(const AttrType typeOfKeyInRecord, vector<Attribute> description)
+: _table(NULL), _type(typeOfKeyInRecord), _desc(description)
+{
+	//construct in-memory hash table
+	//since project did not specify to build own hash table (like it sort of did for grace hash join)
+	//we will use just a standard library's table
+	switch(_type)
+	{
+	case TypeInt:
+		_table = new map<int, vector<void*> >();
+		break;
+	case TypeReal:
+		_table = new map<float, vector<void*> >();
+		break;
+	case TypeVarChar:
+		_table = new map<string, vector<void*> >();
+		break;
+	}
+}
+
+bool inMemoryHashTable::getRecord(const void* key, void* outRecordData, unsigned int& lengthOfRecord)
+{
+	bool foundEntry = false;
+
+	//to avoid compilation errors about "cross intialization" keeping all variable declarations
+	//outside of switch case statements
+	int ikey = 0; float fkey = 0.0f; string skey = "";
+	map<int, vector<void*> >* iTable; map<float, vector<void*> >* fTable; map<string, vector<void*> >* sTable;
+	map<int, vector<void*> >::iterator iEntryIt; map<float, vector<void*> >::iterator fEntryIt; map<string, vector<void*> >::iterator sEntryIt;
+	int lengthOfKey = 0; char* charArr = NULL;
+
+	switch(_type)
+	{
+	case TypeInt:
+		//determine integer key
+		ikey = ((int*) ((const char*)key) )[0];
+
+		//cast _table to map pointer for easier access afterwards
+		iTable = ((map< int, vector<void*> >*)_table);
+
+		//check if such key already been inserted
+		if( (iEntryIt = iTable->find(ikey)) != iTable->end() )
+		{
+			foundEntry = true;
+
+			//copy found record
+			lengthOfRecord = sizeOfRecord(_desc, iEntryIt->second[0]);
+			memcpy(outRecordData, iEntryIt->second[0], lengthOfRecord);
+
+			//remove it from the list
+			iEntryIt->second.erase( iEntryIt->second.begin() );
+
+			//check if list became empty
+			if( iEntryIt->second.size() == 0 )
+			{
+				//then remove entry
+				iTable->erase(iEntryIt);
+			}
+		}
+		break;
+	case TypeReal:
+		//determine real key
+		fkey = ((float*) ((const char*)key) )[0];
+
+		//cast _table to map pointer for easier access afterwards
+		fTable = ((map< float, vector<void*> >*)_table);
+
+		//check if such key already been inserted
+		if( (fEntryIt = fTable->find(fkey)) != fTable->end() )
+		{
+			foundEntry = true;
+
+			//copy found record
+			lengthOfRecord = sizeOfRecord(_desc, fEntryIt->second[0]);
+			memcpy(outRecordData, fEntryIt->second[0], lengthOfRecord);
+
+			//remove it from the list
+			fEntryIt->second.erase( fEntryIt->second.begin() );
+
+			//check if list became empty
+			if( fEntryIt->second.size() == 0 )
+			{
+				//then remove entry
+				fTable->erase(fEntryIt);
+			}
+		}
+		break;
+	case TypeVarChar:
+		//determine length of the key
+		lengthOfKey = ((int*) ((const char*)key) )[0];
+
+		//create string object to represent VarChar key
+		charArr = (char*)malloc(lengthOfKey + 1);
+		charArr[lengthOfKey] = '\0';	//null terminated character array
+		memcpy( charArr, (char*)key + sizeof(int), lengthOfKey );
+		string skey = string(charArr);
+		free(charArr);
+
+		//cast _table to map pointer for easier access afterwards
+		sTable = ((map< string, vector<void*> >*)_table);
+
+		//check if such key already been inserted
+		if( (sEntryIt = sTable->find(skey)) != sTable->end() )
+		{
+			foundEntry = true;
+
+			//copy found record
+			lengthOfRecord = sizeOfRecord(_desc, sEntryIt->second[0]);
+			memcpy(outRecordData, sEntryIt->second[0], lengthOfRecord);
+
+			//remove it from the list
+			sEntryIt->second.erase( sEntryIt->second.begin() );
+
+			//check if list became empty
+			if( sEntryIt->second.size() == 0 )
+			{
+				//then remove entry
+				sTable->erase(sEntryIt);
+			}
+		}
+		break;
+	}
+
+	return foundEntry;
+}
+
+void inMemoryHashTable::clearTable()
+{
+	int i = 0, max = -1;
+	map<int, vector<void*> >::iterator iIt, iMax;
+	map<float, vector<void*> >::iterator fIt, fMax;
+	map<string, vector<void*> >::iterator sIt, sMax;
+	switch(_type)
+	{
+	case TypeInt:
+		iIt = ((map<int, vector<void*> >*)_table)->begin();
+		iMax = ((map<int, vector<void*> >*)_table)->end();
+		for( ; iIt != iMax; iIt++ )
+		{
+			max = (int)iIt->second.size();
+			for( i = 0; i < max; i++ )
+			{
+				free( iIt->second[i] );
+			}
+		}
+		((map<int, vector<void*> >*)_table)->clear();
+		break;
+	case TypeReal:
+		fIt = ((map<float, vector<void*> >*)_table)->begin();
+		fMax = ((map<float, vector<void*> >*)_table)->end();
+		for( ; fIt != fMax; fIt++ )
+		{
+			max = (int)fIt->second.size();
+			for( i = 0; i < max; i++ )
+			{
+				free( fIt->second[i] );
+			}
+		}
+		((map<float, vector<void*> >*)_table)->clear();
+		break;
+	case TypeVarChar:
+		sIt = ((map<string, vector<void*> >*)_table)->begin();
+		sMax = ((map<string, vector<void*> >*)_table)->end();
+		for( ; sIt != sMax; sIt++ )
+		{
+			max = (int)sIt->second.size();
+			for( i = 0; i < max; i++ )
+			{
+				free( sIt->second[i] );
+			}
+		}
+		((map<string, vector<void*> >*)_table)->clear();
+		break;
+	}
+}
+
+inMemoryHashTable::~inMemoryHashTable()
+{
+	//free contents of vectors in each map entry
+	clearTable();
+
+	//free instance of table
+	switch(_type)
+	{
+	case TypeInt:
+		delete (map<int, vector<void*> >*)_table;
+		break;
+	case TypeReal:
+		delete (map<float, vector<void*> >*)_table;
+		break;
+	case TypeVarChar:
+		delete (map<string, vector<void*> >*) _table;
+		break;
+	}
+}
+
+void inMemoryHashTable::insertRecord
+	(const void* recordData, const unsigned int offsetToKeyField, const unsigned int recordLength)
+{
+	//copy the record into a separately maintained buffer
+	void* buf = malloc(recordLength);
+	memcpy(buf, recordData, recordLength);
+
+	//my compiler does not like variables inside switch statement => gives "cross initializaton" errors
+	//so pushing all such variables outside of switch statement
+	int ikey = 0; float fkey = 0.0f; string skey = "";
+	map<int, vector<void*> >* iTable; map<float, vector<void*> >* fTable; map<string, vector<void*> >* sTable;
+	map<int, vector<void*> >::iterator iEntryIt; map<float, vector<void*> >::iterator fEntryIt; map<string, vector<void*> >::iterator sEntryIt;
+	int lengthOfKey = 0;
+	char* charArr = NULL;
+
+	//depending on the type of the key, access table differently
+	switch(_type)
+	{
+	case TypeInt:
+		//determine integer key
+		ikey = ((int*) ((const char*)recordData + offsetToKeyField) )[0];
+
+		//cast _table to map pointer for easier access afterwards
+		iTable = ((map< int, vector<void*> >*)_table);
+
+
+		//check if such key already been inserted
+		if( (iEntryIt = iTable->find(ikey)) == iTable->end() )
+		{
+			//no entry exists, insert new one
+			iTable->insert
+				( std::pair<int, vector<void*> >( ikey, vector<void*>() ) );
+
+			//reset entry iterator
+			iEntryIt = iTable->find(ikey);
+		}
+
+		//insert new entry
+		iEntryIt->second.push_back(buf);
+		break;
+	case TypeReal:
+		//determine real key
+		fkey = ((float*) ((const char*)recordData + offsetToKeyField) )[0];
+
+		//cast _table to map pointer for easier access afterwards
+		fTable = ((map< float, vector<void*> >*)_table);
+
+
+		//check if such key already been inserted
+		if( (fEntryIt = fTable->find(fkey)) == fTable->end() )
+		{
+			//no entry exists, insert new one
+			fTable->insert
+				( std::pair<float, vector<void*> >( fkey, vector<void*>() ) );
+
+			//reset entry iterator
+			fEntryIt = fTable->find(fkey);
+		}
+
+		//insert new entry
+		fEntryIt->second.push_back(buf);
+		break;
+	case TypeVarChar:
+		//determine length of the key
+		lengthOfKey = ((int*) ((const char*)recordData + offsetToKeyField) )[0];
+
+		//create string object to represent VarChar key
+		charArr = (char*)malloc(lengthOfKey + 1);
+		charArr[lengthOfKey] = '\0';	//null terminated character array
+		memcpy( charArr, (char*)recordData + offsetToKeyField + sizeof(int), lengthOfKey );
+		string skey = string(charArr);
+		free(charArr);
+
+		//cast _table to map pointer for easier access afterwards
+		sTable = ((map< string, vector<void*> >*)_table);
+
+		//check if such key already been inserted
+		if( (sEntryIt = sTable->find(skey)) == sTable->end() )
+		{
+			//no entry exists, insert new one
+			sTable->insert
+				( std::pair<string, vector<void*> >( skey, vector<void*>() ) );
+
+			//reset entry iterator
+			sEntryIt = sTable->find(skey);
+		}
+
+		//insert new entry
+		sEntryIt->second.push_back(buf);
+		break;
+	}
+}
+
+void determineAttribute(const Iterator* it, const Condition cond, const bool isLeft, Attribute& outAttr)
+{
+	string attrName = cond.lhsAttr;
+	if( isLeft == false )
+	{
+		if( cond.bRhsIsAttr == false )
+		{
+			//somehow need to integrate with rhsValue, not sure how?
+			outAttr.type = cond.rhsValue.type;
+			outAttr.name = cond.rhsAttr;
+			outAttr.length = 0;
+			return;
+		}
+		attrName = cond.rhsAttr;
+	}
+	vector<Attribute> attrs;
+
+	it->getAttributes(attrs);
+
+	vector<Attribute>::iterator i = attrs.begin(), max = attrs.end();
+	for( ; i != max; i++ )
+	{
+		if( i->name == attrName )
+		{
+			outAttr.length = i->length;
+			outAttr.name = i->name;
+			outAttr.type = i->type;
+			break;
+		}
+	}
+}
+
+BNLJoin::BNLJoin(Iterator *leftIn,	TableScan *rightIn, const Condition &condition, const unsigned numRecords)
+: _hashTable(NULL)
+{
+	//determine attribute of the outer relation
+	determineAttribute(leftIn, condition, true, _outer);
+
+	//determine attribute of the inner relation
+	determineAttribute(rightIn, condition, false, _inner);
+
+	//set inner value
+	_innerValue = condition.rhsValue.data;
+
+	//set operator
+	_operator = condition.op;
+
+	//set block size
+	_blockSize = numRecords;
+
+	//ensure that both iterators are providing the same type of input values
+	if( _outer.type != _inner.type )
+	{
+		exit(-62);	//joining on non-equivalent attribute types
+	}
+
+	leftIn->getAttributes(_outerDesc);
+	rightIn->getAttributes(_innerDesc);
+
+	//now, allocate hash table
+	_hashTable = new inMemoryHashTable(_outer.type, _outerDesc);
+
+	//set list of attributes
+	_attrDesc.insert(_attrDesc.end(), _outerDesc.begin(), _outerDesc.end());
+	_attrDesc.insert(_attrDesc.end(), _innerDesc.begin(), _innerDesc.end());
+
+	//set iterator for inner relation
+	_innerRelation = rightIn;
+
+	//set iterator for outer relation
+	_outerRelation = leftIn;
+
+	//set that we are not yet finished
+	_finishedProcessing = false;
+
+	RC errCode = 0;
+
+	//load the first block of outer relation
+	loadNextBlock();
 }
 ;
 
-BNLJoin::~BNLJoin() {
+RC BNLJoin::reloadInnerRelation()
+{
+	//reload
+	_innerRelation->setIterator();
 
+	//success
+	return 0;
+}
+
+RC BNLJoin::loadNextBlock()
+{
+	RC errCode = 0;
+
+	//remove all records from the previous block
+	_hashTable->clearTable();
+
+	//keep number of records added to the block
+	int curTupleNum = 0;
+
+	//allocate buffer for iterated record
+	void* data = malloc(PAGE_SIZE);
+	memset(data, 0, PAGE_SIZE);
+
+	//populate block until either maximum number of records per block is reached OR outer iterator is exhausted
+	while( curTupleNum < _blockSize )
+	{
+		//get next record from the outer relation
+		if( (errCode = _outerRelation->getNextTuple(data)) != 0 )
+		{
+			//quit, since reached end
+			_finishedProcessing = true;
+			break;
+		}
+
+		//determine position of the field on which to join
+		int offset = 0;
+		if( (errCode = getOffsetToProperField(data, _outerDesc, _outer, offset)) != 0 )
+		{
+			free(data);
+			return errCode;
+		}
+
+		//determine size of the record
+		int length = sizeOfRecord(_outerDesc, data);
+
+		//insert record into hash table
+		_hashTable->insertRecord(data, offset, length);
+
+		//increment number of tuples in this block
+		curTupleNum++;
+	}
+
+	free(data);
+
+	//success
+	return errCode;
+}
+
+BNLJoin::~BNLJoin() {
+	//deallocate hash table
+	delete _hashTable;
 }
 ;
 
 RC BNLJoin::getNextTuple(void *data) {
-	return QE_EOF;
+	//allocate buffer for iterated record
+	void* recordBuf = malloc(PAGE_SIZE);
+	memset(recordBuf, 0, PAGE_SIZE);
+
+	RC errCode = 0;
+
+	while(true)
+	{
+		//get tuple from the inner relation
+		if( (errCode = _innerRelation->getNextTuple(recordBuf)) != 0 )
+		{
+			//next block
+			if( (errCode = loadNextBlock()) != 0 )
+			{
+				free(recordBuf);
+				return errCode;
+			}
+
+			//check if reached the end
+			if(  _finishedProcessing )
+			{
+				//return end of joining procedure
+				free(recordBuf);
+				return QE_EOF;
+			}
+
+			//reload the inner relation
+			reloadInnerRelation();
+		}
+
+		//determine position of the field on which to join
+		int offset = 0;
+		if( (errCode = getOffsetToProperField(recordBuf, _innerDesc, _inner, offset)) != 0 )
+		{
+			free(recordBuf);
+			return errCode;
+		}
+
+		//determine pointer to the field
+		void* ptr = (char*)recordBuf + offset;
+
+		//records
+		void* recordData = malloc(PAGE_SIZE);
+		memset(recordData, 0, PAGE_SIZE);
+		unsigned int lengthOuter = 0;
+
+		//check if this record is in hash table
+		if( _hashTable->getRecord(ptr, recordData, lengthOuter) )
+		{
+			//found match
+
+			//determine size of the record
+			int lengthInner = sizeOfRecord(_innerDesc, recordBuf);
+
+			//copy outer and then inner records into out data buffer
+			memcpy(data, recordData, lengthOuter);
+			data = (char*)data + lengthOuter;
+			memcpy(data, recordBuf, lengthInner);
+
+			//quit and return to the caller
+			free(recordData);
+			break;
+		}
+
+		free(recordData);
+	}
+
+	free(recordBuf);
+
+	//success
+	return errCode;
 }
 ;
 
 void BNLJoin::getAttributes(vector<Attribute> &attrs) const {
-
+	attrs.clear();
+	attrs = _attrDesc;
 }
 ;
 
@@ -840,45 +1340,6 @@ RC Aggregate::getNextTuple(void *data) {
 }
 ;
 
-RC Aggregate::getOffsetToProperField(const void* record, const vector<Attribute> recordDesc, const Attribute properField, int& offset)
-{
-	RC errCode = 0;
-
-	//set initially offset to 0
-	offset = 0;
-
-	//now loop thru record description until the proper field is found
-	vector<Attribute>::const_iterator i = recordDesc.begin(), imax = recordDesc.end();
-	for (; i != imax; i++)
-	{
-		//if the proper field is found, then
-		if( i->name == properField.name )
-		{
-			//quit loop and return
-			break;
-		}
-
-		//update offset
-		switch (i->type)
-		{
-		case TypeInt:
-			offset += sizeof(int);
-			break;
-
-		case TypeReal:
-			offset += sizeof(float);
-			break;
-
-		case TypeVarChar:
-			offset += sizeof(int) + ( (unsigned int*)((char*)record + offset) )[0];
-			break;
-		}
-	}
-
-	//success
-	return errCode;
-}
-
 RC Aggregate::next_basic(void* data)
 {
 	RC errCode = 0;
@@ -1114,3 +1575,41 @@ void Aggregate::getAttributes(vector<Attribute> &attrs) const {
 }
 ;
 
+RC getOffsetToProperField(const void* record, const vector<Attribute> recordDesc, const Attribute properField, int& offset)
+{
+	RC errCode = 0;
+
+	//set initially offset to 0
+	offset = 0;
+
+	//now loop thru record description until the proper field is found
+	vector<Attribute>::const_iterator i = recordDesc.begin(), imax = recordDesc.end();
+	for (; i != imax; i++)
+	{
+		//if the proper field is found, then
+		if( i->name == properField.name )
+		{
+			//quit loop and return
+			break;
+		}
+
+		//update offset
+		switch (i->type)
+		{
+		case TypeInt:
+			offset += sizeof(int);
+			break;
+
+		case TypeReal:
+			offset += sizeof(float);
+			break;
+
+		case TypeVarChar:
+			offset += sizeof(int) + ( (unsigned int*)((char*)record + offset) )[0];
+			break;
+		}
+	}
+
+	//success
+	return errCode;
+}
