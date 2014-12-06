@@ -3,6 +3,7 @@
 
 //prototype(s)
 RC getOffsetToProperField(const void* record, const vector<Attribute> recordDesc, const Attribute properField, int& offset);
+int Globals::numGHJ = 0;
 
 /** Filter Class:
  * This filter class is initialized by an input iterator and a selection condition.
@@ -628,7 +629,7 @@ GHJoin::GHJoin(Iterator *leftIn, Iterator *rightIn, const Condition &condition,
 	_index_manager = IndexManager::instance();
 
 	currentBucket = 0;
-	numGHJoins++;
+	Globals::numGHJ++;
 
 	//Partitioning the left hand
 	leftIn->getAttributes(leftAttrs);
@@ -645,8 +646,8 @@ GHJoin::GHJoin(Iterator *leftIn, Iterator *rightIn, const Condition &condition,
 	//create partitions for left
 	for (unsigned i = 0; i < numPartitions; i++) {
 
-		if ((errCode = _rbfm->createFile("left_join" + to_string(numGHJoins) + "_" + to_string(i)))	!= 0) {
-			cout << "Error: " << errCode << endl;
+		if ((errCode = _rbfm->createFile("left_join" + to_string(Globals::numGHJ) + "_" + to_string(i)))	!= 0) {
+			cout << "Error-: " << errCode << endl;
 		}
 
 	}
@@ -655,7 +656,7 @@ GHJoin::GHJoin(Iterator *leftIn, Iterator *rightIn, const Condition &condition,
 
 		FileHandle fileHandle;
 		if ((errCode = _rbfm->openFile(
-				"left_join" + to_string(numGHJoins) + "_" + to_string(i),
+				"left_join" + to_string(Globals::numGHJ) + "_" + to_string(i),
 				fileHandle)) != 0) {
 			cout << "Error: " << errCode << endl;
 		}
@@ -694,7 +695,7 @@ GHJoin::GHJoin(Iterator *leftIn, Iterator *rightIn, const Condition &condition,
 	for (unsigned i = 0; i < numPartitions; i++) {
 
 		if ((errCode = _rbfm->createFile(
-				"right_join" + to_string(numGHJoins) + "_" + to_string(i)))
+				"right_join" + to_string(Globals::numGHJ) + "_" + to_string(i)))
 				!= 0) {
 			cout << "Error: " << errCode << endl;
 		}
@@ -705,7 +706,7 @@ GHJoin::GHJoin(Iterator *leftIn, Iterator *rightIn, const Condition &condition,
 
 		FileHandle fileHandle;
 		if ((errCode = _rbfm->openFile(
-				"right_join" + to_string(numGHJoins) + "_" + to_string(i),
+				"right_join" + to_string(Globals::numGHJ) + "_" + to_string(i),
 				fileHandle)) != 0) {
 			cout << "Error: " << errCode << endl;
 		}
@@ -874,7 +875,6 @@ RC GHJoin::getNextTuple(void *data) {
 			//next partition
 			currentBucket++;
 			if ((errCode = loadNextPartition()) != 0) {
-				cout << "error_ " << errCode << endl;
 				free(recordBuf);
 				return errCode;
 			}

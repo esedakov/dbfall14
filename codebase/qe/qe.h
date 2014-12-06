@@ -17,7 +17,9 @@ using namespace std;
 
 typedef enum{ MIN = 0, MAX, SUM, AVG, COUNT } AggregateOp;
 
-
+namespace Globals {
+  extern int numGHJ;
+}
 
 // The following functions use the following
 // format for the passed data.
@@ -321,9 +323,10 @@ class GHJoin : public Iterator {
       RBFM_ScanIterator _inner_rsi; //iterator for inner relation
       bool _finishedProcessing; //flags
       bool _starting;
+      int numGHJ;
 
-      unsigned numGHJoins=0;
 };
+
 
 
 
