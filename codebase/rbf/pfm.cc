@@ -393,7 +393,7 @@ RC PagedFileManager::getDataPage(FileHandle &fileHandle, const unsigned int reco
 				}
 				else
 				{
-					pi->_numFreeBytes -= recordSize + sizeof(PageDirSlot);
+					pi->_numFreeBytes = pi->_numFreeBytes - recordSize - sizeof(PageDirSlot);
 				}
 
 				freeSpaceLeftInPage = pi->_numFreeBytes;
@@ -458,8 +458,10 @@ RC PagedFileManager::getDataPage(FileHandle &fileHandle, const unsigned int reco
 
 		//set free space
 		if( hPage->_arrOfPageIds[curPageId]._numFreeBytes == PAGE_SIZE )
-			hPage->_arrOfPageIds[curPageId]._numFreeBytes -= 2 * sizeof(unsigned int);
-		hPage->_arrOfPageIds[curPageId]._numFreeBytes -= recordSize + sizeof(PageDirSlot);
+			hPage->_arrOfPageIds[curPageId]._numFreeBytes =
+					hPage->_arrOfPageIds[curPageId]._numFreeBytes - 2 * sizeof(unsigned int);
+		hPage->_arrOfPageIds[curPageId]._numFreeBytes =
+				hPage->_arrOfPageIds[curPageId]._numFreeBytes - recordSize + sizeof(PageDirSlot);
 
 		freeSpaceLeftInPage = hPage->_arrOfPageIds[curPageId]._numFreeBytes;
 

@@ -47,6 +47,7 @@ public:
 	RC getNextEntry(RID &rid, void *key);  	// Get next matching entry
 	RC close();             			// Terminate index scan
 	IX_ScanIterator _iterator;
+	IXFileHandle _fileHandle;
 };
 
 struct ColumnInfo;
@@ -143,9 +144,9 @@ public:
 
   RC reorganizeTable(const string &tableName);
 
+  RC printIndexFile(const string& fileName, const Attribute& attrOfKey);
 
 protected:
-  RC printIndexFile(const string& fileName, const Attribute& attrOfKey);
   //compose index name that is used to access index files
   std::string composeIndexName(const std::string& tableName, const std::string& columnName);
   //get list of Attributes for any of 3 catalog tables, i.e. Tables, Columns, or Indexes

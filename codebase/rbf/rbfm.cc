@@ -213,11 +213,6 @@ RC RecordBasedFileManager::findRecordSlot(FileHandle &fileHandle, PageNum pagenu
 	//determine size of free space in this page
 	unsigned int szOfFreeSpace = (unsigned int)((char*)startOfDirSlot - ptrToFreeSpace);
 
-	if( freeSpaceLeftInPage != (szOfFreeSpace - szRecord) )
-	{
-		freeSpaceLeftInPage++;
-	}
-
 	//if size of free space is not enough return -22 (because it was suppose to be enough, since this page was found by method getPage)
 	if( szOfFreeSpace < szRecord )
 	{
@@ -852,6 +847,7 @@ RC RecordBasedFileManager::deleteRecord(FileHandle &fileHandle, const vector<Att
 	//find proper slot number pointed by rid
 	PageDirSlot* curDirSlot = endOfDirSlot - (rid.slotNum + 1);
 
+	/*
 	//update header page
 	//define variable to store id of the header page
 	PageNum headerPage = 0;
@@ -898,6 +894,7 @@ RC RecordBasedFileManager::deleteRecord(FileHandle &fileHandle, const vector<Att
 
 	//free data buffer used for header page
 	free(data);
+	*/
 
 	//null the contents of this slot
 	curDirSlot->_offRecord = 0;

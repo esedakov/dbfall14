@@ -1256,8 +1256,9 @@ RC RelationManager::createIndex(const string& tableName, const string& attribute
 		//since index does not store whole record but only <key, RID>
 
 		//find attribute in the record
-		unsigned int offsetToCurrentAttrValue = getOffset(dataBuf, desc, indexAttr);
-		char* key = (char*)dataBuf + offsetToCurrentAttrValue;
+		//unsigned int offsetToCurrentAttrValue = getOffset(dataBuf, desc, indexAttr);	//error: no need to offset, since only a
+																						//		 required (indexing) attribute is returned by an iterator
+		char* key = (char*)dataBuf;
 
 		//go ahead and insert index entry
 		if ( (errCode = ix->insertEntry(ixFileHandle, attribute, key, rid)) != 0)
@@ -2295,12 +2296,34 @@ RC RelationManager::indexScan(const string &tableName,
 		return errCode;
 	}
 
+	int i = 0, max = (int)attributeName.size();
+
+	//CLI:IndexScan has all of its attribute names appended with table name, like "TableName.AttributeName"
+	//but here only attribute name is needed, so loop thru the string and take only the relevant part
+	string attrName;
+	bool foundDot = false;
+	for( i = 0; i < (int)attributeName.size(); i++ )
+	{
+		if( foundDot )
+		{
+			attrName.push_back( attributeName[i] );
+		}
+		if( attributeName[i] == '.' )
+		{
+			foundDot = true;
+		}
+	}
+	if( foundDot == false )
+	{
+		attrName = attributeName;
+	}
+
 	//find attribute
 	Attribute attr;
-	int i = 0, max = (int)attrs.size();
+	i = 0; max = (int)attrs.size();
 	for( ; i < max; i++ )
 	{
-		if( attrs[i].name == attributeName )
+		if( attrs[i].name == attrName )
 		{
 			attr.length = attrs[i].length;
 			attr.name = attrs[i].name;
@@ -2318,29 +2341,29 @@ RC RelationManager::indexScan(const string &tableName,
 	//determine index name
 	//std::map<std::string, IndexInfo>::iterator attrIter = indexIter->second.find( attributeName );
 
-	string name = composeIndexName(tableName, attributeName);
+	string name = composeIndexName(tableName, attrName);
 	IndexManager* ix = IndexManager::instance();
-	IXFileHandle ixHandle;
 
 	//open IX files
-	if( (errCode = ix->openFile(name, ixHandle)) != 0 )
+	if( (errCode = ix->openFile(name, rm_IndexScanIterator._fileHandle)) != 0 )
 	{
 		//fail
 		return errCode;
 	}
 
 	//setup scan
-	if( (errCode = ix->scan(ixHandle, attr, lowKey, highKey, lowKeyInclusive, highKeyInclusive, rm_IndexScanIterator._iterator)) != 0 )
+	if( (errCode = ix->scan(
+			rm_IndexScanIterator._fileHandle, attr, lowKey, highKey, lowKeyInclusive, highKeyInclusive, rm_IndexScanIterator._iterator)) != 0 )
 	{
-		ix->closeFile(ixHandle);
+		ix->closeFile(rm_IndexScanIterator._fileHandle);
 		return errCode;
 	}
 
-	//close file
-	if( (errCode = ix->closeFile(ixHandle)) != 0 )
-	{
-		return errCode;
-	}
+	//close file	(error: should not close file handler that is used in scanning the file)
+	//if( (errCode = ix->closeFile(ixHandle)) != 0 )
+	//{
+	//	return errCode;
+	//}
 
 	//success
 	return errCode;
@@ -2354,6 +2377,7 @@ RM_IndexScanIterator::RM_IndexScanIterator()
 RM_IndexScanIterator::~RM_IndexScanIterator()
 {
 	_iterator.reset();
+
 }
 
 RC RM_IndexScanIterator::getNextEntry(RID & rid, void* key)

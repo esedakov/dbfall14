@@ -596,7 +596,6 @@ void inMemoryHashTable::insertRecord
 	}
 }
 
-
 /**
  * Grace Hash Join  Class:
  **/
@@ -840,7 +839,7 @@ RC GHJoin::loadNextPartition() {
 
 
 
-	//set the inner scan interator over rbfm
+	//set the inner scan iterator over rbfm
 	vector<string> inner_projected_attrs;
 	for (unsigned i = 0; i < _innerAttrs.size(); i++) {
 		inner_projected_attrs.push_back(_innerAttrs[i].name);
@@ -1043,8 +1042,6 @@ BNLJoin::BNLJoin(Iterator *leftIn,	TableScan *rightIn, const Condition &conditio
 	//set that we are not yet finished
 	_finishedProcessing = false;
 
-	RC errCode = 0;
-
 	//load the first block of outer relation
 	loadNextBlock();
 }
@@ -1109,8 +1106,6 @@ RC BNLJoin::loadNextBlock()
 }
 
 BNLJoin::~BNLJoin() {
-	//deallocate hash table
-	delete _hashTable;
 }
 ;
 
@@ -1138,6 +1133,10 @@ RC BNLJoin::getNextTuple(void *data) {
 			{
 				//return end of joining procedure
 				free(recordBuf);
+
+				//deallocate hash table
+				delete _hashTable;
+
 				return QE_EOF;
 			}
 
