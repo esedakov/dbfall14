@@ -943,7 +943,7 @@ void GHJoin::getAttributes(vector<Attribute> &attrs) const {
 RC GHJoin::cleanUp(){
 	//delete the temporary files
 	RC errCode=0;
-	for(int i=0; i<_numPartitions; i++){
+	for(unsigned i=0; i<_numPartitions; i++){
 		//left hand
 		string fileName = leftPartitions[i]._info->_name;
 		if((_rbfm->closeFile(leftPartitions[i]))!=0)
@@ -1197,26 +1197,169 @@ void BNLJoin::getAttributes(vector<Attribute> &attrs) const {
 /**
  * Index Nested-Loop Join Class:
  **/
-INLJoin::INLJoin(Iterator *leftIn, IndexScan *rightIn,
-		const Condition &condition) {
+INLJoin::INLJoin(Iterator *leftIn, IndexScan *rightIn,	const Condition &condition) {
+	/*
+	 * rightIn must be an Index scan over the same attribute of the Join query
+	 */
+
+
+	/**
+		 * Algorithm:
+		 * foreach tuple r in R do
+		 * 		foreach tuple s in S where r i == s j do
+		 * 			add <r, s> to result
+		 *
+		 * 	In our case there is an index on the join column of one relation
+		 * 	(say S), can make it the inner and exploit the index.
+		 **/
+
+	_leftIn=leftIn;
+	_rightIn=rightIn;
+	//get the vector of attributes for each hand
+	leftIn->getAttributes(_leftAttrs);
+	rightIn->getAttributes(_rightAttrs);
+
+
+	//find the correct position in the vector of attributes in left hand
+	for (unsigned i = 0; i < _leftAttrs.size(); i++) {
+		if (_leftAttrs[i].name.compare(condition.lhsAttr) == 0) {
+			_leftPosition = i;
+			break;
+		}
+	}
+
+	//built the final vector of attributes
+	for (unsigned i = 0; i < _leftAttrs.size(); i++) {
+		_finalAttrs.push_back(_leftAttrs[i]);
+	}
+
+	for (unsigned i = 0; i < _rightAttrs.size(); i++) {
+		_finalAttrs.push_back(_rightAttrs[i]);
+
+	}
 
 }
-;
+
 
 INLJoin::~INLJoin() {
 
 }
-;
+
 
 RC INLJoin::getNextTuple(void *data) {
-	return QE_EOF;
+
+	RC errCode=0;
+	RC result; //useful for join query result
+
+	//allocate buffer for both part of the hand (outer and inner)
+	void* leftTuple = malloc(PAGE_SIZE);
+	memset(leftTuple, 0, PAGE_SIZE);
+	void* rightTuple = malloc(PAGE_SIZE);
+	memset(rightTuple, 0, PAGE_SIZE);
+
+	do{
+		//get the first tuple of left hand
+		result= _leftIn->getNextTuple(leftTuple);
+
+		//if there is no more tuples in left hand
+		if(result==QE_EOF){
+			free(leftTuple);
+			free(rightTuple);
+			return QE_EOF;
+		}
+
+		//determine position of the field on which to join
+		int offset = 0;
+		if( (errCode = getOffsetToProperField(leftTuple, _leftAttrs, _leftAttrs[_leftPosition], offset)) != 0 )
+		{
+			free(leftTuple);
+			return errCode;
+		}
+
+		//determine pointer to the field
+		void* ptr = (char*)leftTuple + offset;
+
+		//set the new key for IdexScan
+		void *lowKey = ptr;
+		void *highKey = ptr;
+		bool lowKeyInclusive = true;
+		bool highKeyInclusive = true;
+
+		_rightIn->setIterator(lowKey, highKey, lowKeyInclusive, highKeyInclusive);
+
+		//get the new tuple that matches with the key
+		result=_rightIn->getNextTuple(rightTuple);
+
+	}while(result==QE_EOF);
+
+	//prepare result
+	int lengthLeft = sizeOfRecord(_leftAttrs, leftTuple);
+	int lengthRight = sizeOfRecord(_rightAttrs, rightTuple);
+
+
+	//copy outer and then inner records into out data buffer
+	memcpy(data, leftTuple, lengthLeft);
+	data = (char*) data + lengthLeft;
+	memcpy(data, rightTuple, lengthRight);
+
+	free(leftTuple);
+	free(rightTuple);
+	return errCode;
 }
-;
+
 
 void INLJoin::getAttributes(vector<Attribute> &attrs) const {
-
+	attrs.clear();
+	attrs=_finalAttrs;
 }
-;
+
+void INLJoin::getFieldTuple(void * tuple, void * field, vector<Attribute> attrs, unsigned pos) {
+	int offset = 0;
+	unsigned i = 0;
+	for (i = 0; i < pos; i++) { //offset to the correct position of the field in tuple
+		switch (attrs[i].type) {
+
+		case TypeInt:
+			//sum field size of int
+			offset += sizeof(int);
+			break;
+
+		case TypeReal:
+			//sum field size of float
+			offset += sizeof(float);
+			break;
+
+		case TypeVarChar:
+			//get integer that represent size of char-array and add it to the offset
+			int stringLength = *(int *) ((char *) tuple + offset);
+			offset += sizeof(int) + stringLength;
+			break;
+		}
+
+	}
+
+	int attrLength = 0;
+	//get the length of the field
+	switch (attrs[i].type) {
+	case TypeInt:
+		//sum length of int
+		attrLength = sizeof(int);
+		break;
+
+	case TypeReal:
+		//sum length of float
+		attrLength = sizeof(float);
+		break;
+
+	case TypeVarChar:
+		//sum length of variable char
+		attrLength = *(int *) ((char *) tuple + offset) + sizeof(int);
+		break;
+	}
+
+	//get the property field
+	memcpy(field, (char *) tuple + offset, attrLength);
+}
 
 /**
  * Aggregate Class:

@@ -374,7 +374,21 @@ class INLJoin : public Iterator {
         RC getNextTuple(void *data);
         // For attribute in vector<Attribute>, name it as rel.attr
         void getAttributes(vector<Attribute> &attrs) const;
+    private:
+        void getFieldTuple(void * tuple, void * field, vector<Attribute> attrs, unsigned pos);
+
+    private:
+        vector<Attribute> _leftAttrs; // vector of left attributes
+        vector<Attribute> _rightAttrs; // vector of right attributes
+        vector<Attribute> _finalAttrs; // vector of final attributes
+
+        unsigned _leftPosition; //left position of attribute used for Join query
+        unsigned _rightPosition; //left position of attribute used for Join query
+
+        Iterator * _leftIn;
+        IndexScan * _rightIn;
 };
+
 
 
 class Aggregate : public Iterator {
