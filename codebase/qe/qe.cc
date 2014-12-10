@@ -8,7 +8,7 @@ int Globals::numGHJ = 0;
 /** Filter Class:
  * This filter class is initialized by an input iterator and a selection condition.
  * It filters the tuples from the input iterator by applying the filter predicate condition on them.
- */
+*/
 Filter::Filter(Iterator* input, const Condition &condition) {
 	/**
 	 * obs: I guess in this case condition.bRhsIsAttr is always FALSE, otherwise it is a Join query
