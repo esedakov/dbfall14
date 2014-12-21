@@ -31,6 +31,8 @@ void TEST_RM_9(const string &tableName, vector<RID> &rids, vector<int> &sizes)
         memset(tuple, 0, 1000);
         prepareLargeTuple(i, tuple, &size);
 
+        printTuple(tuple, size);
+
         rc = rm->insertTuple(tableName, tuple, rid);
         assert(rc == success);
 

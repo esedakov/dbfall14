@@ -42,7 +42,7 @@ public:
     static PagedFileManager* instance();                     // Access to the _pf_manager instance
 
     bool isExisting(const char *fileName)	const;
-
+    RC getNumOpenInstances(const char* fileName);
     RC createFile    (const char *fileName);                         // Create a new file
     RC createFileHeader(const char* fileName);
     RC destroyFile   (const char *fileName);                         // Destroy a file
@@ -51,7 +51,8 @@ public:
     RC closeFile     (FileHandle &fileHandle);                       // Close a file
     RC getDataPage(FileHandle &fileHandle, const unsigned int recordSize, PageNum& pageNum, PageNum& headerPage, unsigned int& freeSpaceLeftInPage);
     RC insertPage(FileHandle &fileHandle, PageNum& headerPageId, PageNum& dataPageId, const void* content);
-    RC findHeaderPage(FileHandle fileHandle, PageNum pageId, PageNum& retHeaderPage);
+    RC findHeaderPage(FileHandle& fileHandle, PageNum pageId, PageNum& retHeaderPage);
+    RC getLastHeaderPage(FileHandle& fileHeader, PageNum& lastHeaderPageId);
 
 protected:
     PagedFileManager();                                   // Constructor

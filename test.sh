@@ -2,6 +2,7 @@
 #unzip $1.zip
 #cd $1
 cd codebase
+<<<<<<< HEAD
 cd rbf
 make clean
 make
@@ -30,3 +31,30 @@ make
 ./rmtest_extra_1
 ./rmtest_extra_2
 ./rmtest_extra_3
+=======
+#cd rbf
+#make clean
+#make
+#cd ../rm
+#make clean
+#make
+#cd ../ix
+cd ix
+make clean
+make
+./ixtest1
+#./ixtest2
+#./ixtest3
+#./ixtest4a
+#./ixtest4b
+#./ixtest4c
+#./ixtest5
+#./ixtest6
+#./ixtest7
+#./ixtest8
+#./ixtest_extra_1
+#./ixtest_extra_2a
+#./ixtest_extra_2b
+#./ixtest_extra_2c
+#./ixtest_extra_2d
+>>>>>>> ab1c6f9b9c8554d08196b6e6aed1299623262b27

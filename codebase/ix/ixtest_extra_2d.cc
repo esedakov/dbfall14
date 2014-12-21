@@ -12,12 +12,22 @@ IndexManager *indexManager;
 
 int testCase_extra_2d(const string &indexFileName, const Attribute &attribute)
 {
+<<<<<<< HEAD
 	// Extra test case for Undergrads. Mandatory for Grads.
 	// Checks whether deleting an entry after getNextEntry() is handled properly or not.
 	// Pass: 5 extra credit points for Undergrads if their code passes Extra Test 2a - 2d. 
 	//       No score deduction for Grads if their code passes Extra Test 2a - 2d.
 	// Fail: no extra points for Undergrads. Points will be deducted for Grads for each failing test case.
 	
+=======
+	// Checks whether deleting an entry after getNextEntry() for RANGE SCAN case is handled properly or not.
+	//
+	// Extra test case for Undergrads and Grads.
+	// Pass: 5 extra credit points for Undergrads if their code passes all of 2a - 2d.
+	//       5 extra credit points for Grads if their code passes all of 2a - 2d.
+	// Fail: no extra points for Undergrads and Grads.
+	//
+>>>>>>> ab1c6f9b9c8554d08196b6e6aed1299623262b27
     // Functions tested
     // 1. Create Index
     // 2. OpenIndex
@@ -29,7 +39,11 @@ int testCase_extra_2d(const string &indexFileName, const Attribute &attribute)
     // 8. CloseIndex
     // 9. DestroyIndex
     // NOTE: "**" signifies the new functions being tested in this test case.
+<<<<<<< HEAD
     cout << endl << "****In Test Case 10****" << endl;
+=======
+    cout << endl << "****In Extra Test Case 2d****" << endl;
+>>>>>>> ab1c6f9b9c8554d08196b6e6aed1299623262b27
 
     RC rc;
     RID rid;
@@ -111,7 +125,11 @@ int testCase_extra_2d(const string &indexFileName, const Attribute &attribute)
     while(ix_ScanIterator.getNextEntry(rid, &key) == success)
     {
         if(count % 1000 == 0)
+<<<<<<< HEAD
             cout << rid.pageNum << " " << rid.slotNum << endl;
+=======
+            cout << "returned rid: " << rid.pageNum << " " << rid.slotNum << endl;
+>>>>>>> ab1c6f9b9c8554d08196b6e6aed1299623262b27
 
         key = A[rid.pageNum-1];
         rc = indexManager->deleteEntry(ixfileHandle, attribute, &key, rid);
@@ -181,11 +199,19 @@ int testCase_extra_2d(const string &indexFileName, const Attribute &attribute)
     	return fail;
     }
 
+<<<<<<< HEAD
+=======
+    cout << endl;
+>>>>>>> ab1c6f9b9c8554d08196b6e6aed1299623262b27
     count = 0;
     while(ix_ScanIterator.getNextEntry(rid, &key) == success)
     {
         if (count % 1000 == 0)
+<<<<<<< HEAD
             cout << rid.pageNum << " " << rid.slotNum << endl;
+=======
+            cout << "returned rid: " << rid.pageNum << " " << rid.slotNum << endl;
+>>>>>>> ab1c6f9b9c8554d08196b6e6aed1299623262b27
 
         if(rid.pageNum > 40000 && B[rid.pageNum-40001] > 45000)
         {
@@ -252,10 +278,17 @@ int main()
 
 	RC result = testCase_extra_2d(indexFileName, attrHeight);
     if (result == success) {
+<<<<<<< HEAD
     	cout << "IX_Test Extra Case 2d passed. Deleting an entry after getNextEntry() is properly handled." << endl;
     	return success;
     } else {
     	cout << "IX_Test Extra Case 2d failed." << endl;
+=======
+    	cout << "IX_Test Extra Case 2d passed." << endl;
+    	return success;
+    } else {
+    	cout << "IX_Test Extra Case 2d failed. Deleting an entry after getNextEntry() for RANGE SCAN is not properly handled." << endl;
+>>>>>>> ab1c6f9b9c8554d08196b6e6aed1299623262b27
     	return fail;
     }
 
